@@ -254,7 +254,7 @@ function LessUnimmersiveFirstPerson.Init()
         ImGui.End()
     end)
 
-    registerHotkey("BetterFirstPerson", "Toggle Enabled", function()
+    registerHotkey("LessUnimmersiveFirstPerson_ToggleEnabled", "Toggle Enabled", function()
         isEnabled = not isEnabled
         if isEnabled and ShouldSetCamera() then
             LessUnimmersiveFirstPerson.HandleCamera(true)
