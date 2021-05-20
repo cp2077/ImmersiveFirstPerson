@@ -14,9 +14,3 @@ The camera is adaptive, so you don't have to worry about clipping. Camera will o
 
 1. Make sure you've installed Cyber Engine Tweaks.
 2. Drop the content of an archive into your cyberpunk directory (where the "bin" folder is).
-
-## Changelog:
-
-
-### 1.0.0 - 20/05/2021
-- Release
