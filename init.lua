@@ -1,4 +1,4 @@
-local Camera = { version = "1.0.0" }
+local LessUnimmersiveFirstPerson = { version = "1.0.0" }
 
 -- States
 local inited = false
@@ -117,7 +117,7 @@ end
 
 -- Handlers
 local wasCrouching = false
-function Camera.HandleCamera(force)
+function LessUnimmersiveFirstPerson.HandleCamera(force)
     if force == nil then force = false end
 
     if not ShouldSetCamera() then
@@ -202,7 +202,7 @@ function Camera.HandleCamera(force)
 end
 
 -- INIT
-function Camera.Init()
+function LessUnimmersiveFirstPerson.Init()
     registerForEvent("onInit", function()
         inited = true
         defaultFOV = GetFOV()
@@ -233,7 +233,7 @@ function Camera.Init()
             return
         end
 
-        Camera.HandleCamera()
+        LessUnimmersiveFirstPerson.HandleCamera()
     end)
 
     registerForEvent("onDraw", function()
@@ -241,12 +241,12 @@ function Camera.Init()
             return
         end
 
-        ImGui.Begin("BFC", ImGuiWindowFlags.AlwaysAutoResize)
+        ImGui.Begin("LessUnimmersiveFirstPerson", ImGuiWindowFlags.AlwaysAutoResize)
 
         isEnabled, IsEnabledToggled = ImGui.Checkbox("Enabled", isEnabled)
         if IsEnabledToggled then
             if isEnabled and ShouldSetCamera() then
-                Camera.HandleCamera(true)
+                LessUnimmersiveFirstPerson.HandleCamera(true)
             elseif not IsInVehicle() or (IsInVehicle() and not HasBetterVehicleFirstPerson()) then
                 ResetCamera()
             end
@@ -257,7 +257,7 @@ function Camera.Init()
     registerHotkey("BetterFirstPerson", "Toggle Enabled", function()
         isEnabled = not isEnabled
         if isEnabled and ShouldSetCamera() then
-            Camera.HandleCamera(true)
+            LessUnimmersiveFirstPerson.HandleCamera(true)
         elseif not IsInVehicle() or (IsInVehicle() and not HasBetterVehicleFirstPerson()) then
             ResetCamera()
         end
@@ -271,7 +271,7 @@ function Camera.Init()
         isOverlayOpen = false
     end)
 
-    return { ["version"] = Camera.version }
+    return { ["version"] = LessUnimmersiveFirstPerson.version }
 end
 
-return Camera.Init()
+return LessUnimmersiveFirstPerson.Init()
