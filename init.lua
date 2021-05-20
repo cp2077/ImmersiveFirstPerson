@@ -1,4 +1,4 @@
-local Camera = {}
+local Camera = { version = "1.0.0" }
 
 -- States
 local inited = false
@@ -270,6 +270,8 @@ function Camera.Init()
     registerForEvent("onOverlayClose", function()
         isOverlayOpen = false
     end)
+
+    return { ["version"] = Camera.version }
 end
 
 return Camera.Init()
