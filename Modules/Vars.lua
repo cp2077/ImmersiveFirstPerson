@@ -1,0 +1,27 @@
+return {
+    FREELOOK_DEFAULT_SENSITIVITY = 20,
+    FREELOOK_MAX_YAW = 115,
+    FREELOOK_MAX_PITCH = 80,
+    FREELOOK_MAX_Y = 0.060,
+    FREELOOK_MIN_Z = -0.100,
+    FREELOOK_MAX_X_SHIFT = 0.085,
+    FREELOOK_MAX_ROLL = 20,
+    FREELOOK_SMOOTH_RESTORE_ITERS = 15,
+    --
+    -- The bigger value, the more you need to move camera down to apply changes
+    OFFSET = 30,
+    PITCH_CHANGE_STEP = 0.1,
+
+    SHIFT_BASE_VALUE = -0.125,
+    HEIGHT_BASE_VALUE = -0.10,
+    LEAN_BASE_VALUE = -9,
+    FOV_BASE_VALUE = -8,
+
+    CROUCH_MULT_SHIFT = 1.35,
+    CROUCH_MULT_LEAN = 1.5,
+    CROUCH_MULT_HEIGHT = 1.17,
+    STOP_SHIFT_BOOST_AT = 0.80,
+    HEIGHT_INCREASE_KEY_POINT = 0.37,
+    --
+    CONFIG_FILE_NAME = "config.json"
+}
