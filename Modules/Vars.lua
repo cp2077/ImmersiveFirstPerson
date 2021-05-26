@@ -1,12 +1,15 @@
 return {
+    FREELOOK_SMOOTH_RESTORE_ITERS = 15,
     FREELOOK_DEFAULT_SENSITIVITY = 20,
     FREELOOK_MAX_YAW = 115,
+    FREELOOK_MAX_COMBAT_YAW = 35,
     FREELOOK_MAX_PITCH = 80,
+    FREELOOK_MAX_COMBAT_PITCH = 25,
     FREELOOK_MAX_Y = 0.060,
     FREELOOK_MIN_Z = -0.100,
     FREELOOK_MAX_X_SHIFT = 0.085,
     FREELOOK_MAX_ROLL = 20,
-    FREELOOK_SMOOTH_RESTORE_ITERS = 15,
+    FREELOOK_MAX_COMBAT_ROLL = 10,
     --
     -- The bigger value, the more you need to move camera down to apply changes
     OFFSET = 30,

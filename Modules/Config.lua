@@ -8,6 +8,7 @@ local Config = {
         freeLookInCombat = false,
         mouseNativeSensX = -1,
         mouseNativeSensY = -1,
+        smoothRestoreSpeed = 15,
     },
     isReady = false,
 }

@@ -490,7 +490,6 @@ local function initialize(event)
 
 	if required[GameUI.Event.Session] and not initialized[GameUI.Event.Session] then
 		Observe('QuestTrackerGameController', 'OnInitialize', function()
-            print("quest")
 			--spdlog.error(('QuestTrackerGameController::OnInitialize()'))
 
 			if isDetached then
@@ -504,7 +503,6 @@ local function initialize(event)
 		end)
 
 		Observe('QuestTrackerGameController', 'OnUninitialize', function()
-            print("quest")
 			--spdlog.error(('QuestTrackerGameController::OnUninitialize()'))
 
 			if Game.GetPlayer() == nil then
@@ -568,7 +566,6 @@ local function initialize(event)
 
 		for _, menuScenario  in pairs(menuOpenListeners) do
 			Observe(menuScenario, 'OnLeaveScenario', function(_, menuName)
-            print("quest")
 				--spdlog.error(('%s::OnLeaveScenario()'):format(menuScenario))
 
 				if type(menuName) ~= 'userdata' then
@@ -584,7 +581,6 @@ local function initialize(event)
 		end
 
 		Observe('MenuScenario_HubMenu', 'OnSelectMenuItem', function(menuItemData)
-            print("quest")
 			--spdlog.error(('MenuScenario_HubMenu::OnSelectMenuItem(%q)'):format(menuItemData.menuData.label))
 
 			updateMenuItem(toStudlyCase(menuItemData.menuData.label))
@@ -592,7 +588,6 @@ local function initialize(event)
 		end)
 
 		Observe('MenuScenario_HubMenu', 'OnCloseHubMenu', function(_)
-            print("quest")
 			--spdlog.error(('MenuScenario_HubMenu::OnCloseHubMenu()'))
 
 			updateMenuItem(false)
@@ -636,7 +631,6 @@ local function initialize(event)
 		for menuScenario, menuItemEvents in pairs(menuItemListeners) do
 			for menuEvent, menuItem in pairs(menuItemEvents) do
 				Observe(menuScenario, menuEvent, function()
-            print("quest")
 					--spdlog.error(('%s::%s()'):format(menuScenario, menuEvent))
 
 					updateMenuScenario(menuScenario)
@@ -653,7 +647,6 @@ local function initialize(event)
 
 		for menuScenario, menuBackEvent in pairs(menuBackListeners) do
 			Observe(menuScenario, menuBackEvent, function(self)
-            print("quest")
 				--spdlog.error(('%s::%s()'):format(menuScenario, menuBackEvent))
 
 				if Game.NameToString(self.prevMenuName) == 'settings_main' then
@@ -667,7 +660,6 @@ local function initialize(event)
 		end
 
 		Observe('SingleplayerMenuGameController', 'OnSavesReady', function()
-            print("quest")
 			--spdlog.error(('SingleplayerMenuGameController::OnSavesReady()'))
 
 			updateMenuScenario('MenuScenario_SingleplayerMenu')
@@ -684,7 +676,6 @@ local function initialize(event)
 
 	if required[GameUI.Event.Vehicle] and not initialized[GameUI.Event.Vehicle] then
 		Observe('hudCarController', 'OnCameraModeChanged', function(mode)
-            print("quest")
 			--spdlog.error(('hudCarController::OnCameraModeChanged(%s)'):format(tostring(mode)))
 
 			updateVehicle(true, mode)
@@ -692,7 +683,6 @@ local function initialize(event)
 		end)
 
 		Observe('hudCarController', 'OnUnmountingEvent', function()
-            print("quest")
 			--spdlog.error(('hudCarController::OnUnmountingEvent()'))
 
 			updateVehicle(false, false)
@@ -700,7 +690,6 @@ local function initialize(event)
 		end)
 
 		Observe('gameuiPanzerHUDGameController', 'OnUninitialize', function()
-            print("quest")
 			--spdlog.error(('gameuiPanzerHUDGameController::OnUninitialize()'))
 
 			updateVehicle(false, false)
@@ -708,7 +697,6 @@ local function initialize(event)
 		end)
 
 		Observe('PlayerVisionModeController', 'OnRestrictedSceneChanged', function(sceneTierValue)
-            print("quest")
 			--spdlog.error(('PlayerVisionModeController::OnRestrictedSceneChanged(%d)'):format(sceneTierValue))
 
 			if isVehicle then
@@ -724,7 +712,6 @@ local function initialize(event)
 
 	if required[GameUI.Event.Braindance] and not initialized[GameUI.Event.Braindance] then
 		Observe('BraindanceGameController', 'OnIsActiveUpdated', function(braindanceActive)
-            print("quest")
 			--spdlog.error(('BraindanceGameController::OnIsActiveUpdated(%s)'):format(tostring(braindanceActive)))
 
 			updateBraindance(braindanceActive)
@@ -738,7 +725,6 @@ local function initialize(event)
 
 	if required[GameUI.Event.Scene] and not initialized[GameUI.Event.Scene] then
 		Observe('PlayerVisionModeController', 'OnRestrictedSceneChanged', function(sceneTierValue)
-            print("quest")
 			--spdlog.error(('PlayerVisionModeController::OnRestrictedSceneChanged(%d)'):format(sceneTierValue))
 
 			notifyAfterStart(function()
@@ -753,7 +739,6 @@ local function initialize(event)
 
 	if required[GameUI.Event.PhotoMode] and not initialized[GameUI.Event.PhotoMode] then
 		Observe('gameuiPhotoModeMenuController', 'OnShow', function()
-            print("quest")
 			--spdlog.error(('PhotoModeMenuController::OnShow()'))
 
 			updatePhotoMode(true)
@@ -761,7 +746,6 @@ local function initialize(event)
 		end)
 
 		Observe('gameuiPhotoModeMenuController', 'OnHide', function()
-            print("quest")
 			--spdlog.error(('PhotoModeMenuController::OnHide()'))
 
 			updatePhotoMode(false)
@@ -777,7 +761,6 @@ local function initialize(event)
 		local fastTravelStart
 
 		Observe('FastTravelSystem', 'OnToggleFastTravelAvailabilityOnMapRequest', function(request)
-            print("quest")
 			--spdlog.error(('FastTravelSystem::OnToggleFastTravelAvailabilityOnMapRequest()'))
 
 			if request.isEnabled then
@@ -786,7 +769,6 @@ local function initialize(event)
 		end)
 
 		Observe('FastTravelSystem', 'OnPerformFastTravelRequest', function(request)
-            print("quest")
 			--spdlog.error(('FastTravelSystem::OnPerformFastTravelRequest()'))
 
 			local fastTravelDestination = request.pointData.pointRecord
@@ -799,7 +781,6 @@ local function initialize(event)
 		end)
 
 		Observe('FastTravelSystem', 'OnLoadingScreenFinished', function(finished)
-            print("quest")
 			--spdlog.error(('FastTravelSystem::OnLoadingScreenFinished(%s)'):format(tostring(finished)))
 
 			if isFastTravel and finished then
@@ -817,7 +798,6 @@ local function initialize(event)
 
 	if required[GameUI.Event.Tutorial] and not initialized[GameUI.Event.Tutorial] then
 		Observe('gameuiTutorialPopupGameController', 'PauseGame', function(_, tutorialActive)
-            print("quest")
 			--spdlog.error(('gameuiTutorialPopupGameController::PauseGame(%s)'):format(tostring(tutorialActive)))
 
 			updateTutorial(tutorialActive)
@@ -831,7 +811,6 @@ local function initialize(event)
 
 	if required[GameUI.Event.Context] and not initialized[GameUI.Event.Context] then
 		Observe('gameuiGameSystemUI', 'PushGameContext', function(_, newContext)
-            print("quest")
 			--spdlog.error(('GameSystemUI::PushGameContext(%s)'):format(tostring(newContext)))
 
 			if isBraindance and newContext.value == GameUI.Context.Scanning.value then
@@ -843,7 +822,6 @@ local function initialize(event)
 		end)
 
 		Observe('gameuiGameSystemUI', 'PopGameContext', function(_, oldContext)
-            print("quest")
 			--spdlog.error(('GameSystemUI::PopGameContext(%s)'):format(tostring(oldContext)))
 
 			if isBraindance and oldContext.value == GameUI.Context.Scanning.value then
@@ -859,7 +837,6 @@ local function initialize(event)
 		end)
 
 		Observe('HUDManager', 'OnQuickHackUIVisibleChanged', function(quickhacking)
-            print("quest")
 			--spdlog.error(('HUDManager::OnQuickHackUIVisibleChanged(%s)'):format(tostring(quickhacking)))
 
 			if quickhacking then
@@ -872,7 +849,6 @@ local function initialize(event)
 		end)
 
 		Observe('gameuiGameSystemUI', 'ResetGameContext', function()
-            print("quest")
 			--spdlog.error(('GameSystemUI::ResetGameContext()'))
 
 			updateContext()
@@ -886,7 +862,6 @@ local function initialize(event)
 
 	if required[GameUI.Event.Johnny] and not initialized[GameUI.Event.Johnny] then
 		Observe('cpPlayerSystem', 'OnLocalPlayerPossesionChanged', function(_, possession)
-            print("quest")
 			if type(possession) ~= 'userdata' then
 				possession = _
 			end
@@ -899,7 +874,6 @@ local function initialize(event)
 		end)
 
 		Observe('cpPlayerSystem', 'OnLocalPlayerChanged', function(player)
-            print("quest")
 			--spdlog.error(('cpPlayerSystem::OnLocalPlayerChanged(%s)'):format(tostring(player:IsJohnnyReplacer())))
 
 			notifyAfterStart(function()
@@ -914,7 +888,6 @@ local function initialize(event)
 
 	if required[GameUI.Event.Cyberspace] and not initialized[GameUI.Event.Cyberspace] then
 		Observe('PlayerPuppet', 'OnStatusEffectApplied', function(evt)
-            print("quest")
 			local applyCyberspacePresence = evt.staticData:GameplayTagsContains('CyberspacePresence')
 
 			if applyCyberspacePresence then
@@ -925,7 +898,6 @@ local function initialize(event)
 		end)
 
 		Observe('PlayerPuppet', 'OnStatusEffectRemoved', function(evt)
-            print("quest")
 			local removeCyberspacePresence = evt.staticData:GameplayTagsContains('CyberspacePresence')
 
 			if removeCyberspacePresence then

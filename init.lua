@@ -29,9 +29,10 @@ function ResetCamera(force)
 end
 
 local lastPitch = 0
-function ShouldSetCamera()
+function ShouldSetCamera(ignoreWeapon)
+    if ignoreWeapon == nil then ignoreWeapon = false end
     local isCutScene = Helpers.GetSceneTier() >= 4
-    return not isCutScene and not Helpers.IsInVehicle() and not Helpers.HasWeapon() and not Helpers.IsCarryingBody()
+    return not isCutScene and not Helpers.IsInVehicle() and (not Helpers.HasWeapon() or ignoreWeapon) and not Helpers.IsCarryingBody()
 end
 function IsCrouching()
     return Game.GetPlayer():GetPS():IsCrouch()
@@ -146,8 +147,10 @@ function ImmersiveFirstPerson.RestoreFreeCam()
         return
     end
 
-    -- local progressEased = Easings.EaseOutCubic(freeLookRestore.progress / Vars.FREELOOK_SMOOTH_RESTORE_ITERS)
-    local progressEased = (freeLookRestore.progress / Vars.FREELOOK_SMOOTH_RESTORE_ITERS)
+    local itersWithSpeed = Vars.FREELOOK_SMOOTH_RESTORE_ITERS / Config.inner.smoothRestoreSpeed * Vars.FREELOOK_SMOOTH_RESTORE_ITERS
+
+    -- local progressEased = Easings.EaseOutCubic(freeLookRestore.progress / itersWithSpeed)
+    local progressEased = (freeLookRestore.progress / itersWithSpeed)
     local roll = math.floor((curEuler.roll - progressEased * curEuler.roll) * 10) / 10
     local pitch = math.floor((curEuler.pitch - progressEased * curEuler.pitch) * 10) / 10
     local yaw = math.floor((curEuler.yaw - progressEased * curEuler.yaw) * 10) / 10
@@ -155,7 +158,7 @@ function ImmersiveFirstPerson.RestoreFreeCam()
     local y = math.floor((curPos.y - progressEased * curPos.y) * 1000) / 1000
     local z = math.floor((curPos.z - progressEased * curPos.z) * 1000) / 1000
 
-    if freeLookRestore.progress >= Vars.FREELOOK_SMOOTH_RESTORE_ITERS then
+    if freeLookRestore.progress >= itersWithSpeed then
         roll = 0
         pitch = 0
         yaw = 0
@@ -177,11 +180,12 @@ local function curve(t, a, b, c)
     return y
 end
 
-function ImmersiveFirstPerson.HandleFreeObservation(relX, relY)
+function ImmersiveFirstPerson.HandleFreeLook(relX, relY)
     if Helpers.IsRestoringCamera() then
         return
     end
-    if not ShouldSetCamera() then
+
+    if not ShouldSetCamera(Config.inner.freeLookInCombat) then
         -- BVFP wil set camera automatically
         if Helpers.IsInVehicle() and Helpers.HasBVFP() then
             return
@@ -208,7 +212,8 @@ function ImmersiveFirstPerson.HandleFreeObservation(relX, relY)
     local xSensitivity = 0.07 / zoom * Config.inner.freeLookSensitivity/20
     local ySensitivity = 0.07 / zoom * Config.inner.freeLookSensitivity/20
 
-    local yaw = math.min(Vars.FREELOOK_MAX_YAW, math.max(-Vars.FREELOOK_MAX_YAW, curYaw - (relX*xSensitivity)))
+    local yaw = math.min(Vars.FREELOOK_MAX_YAW, math.max( -Vars.FREELOOK_MAX_YAW, (curYaw - (relX*xSensitivity))))
+
     -- yawCorrection need to higher up pitch when approaching high yaw (when looking over shoulder)
     local pitch = math.min(Vars.FREELOOK_MAX_PITCH, math.max(-Vars.FREELOOK_MAX_PITCH, (curPitch) + (relY*ySensitivity)))
     lastNativePitchUsed = true
@@ -216,6 +221,7 @@ function ImmersiveFirstPerson.HandleFreeObservation(relX, relY)
     -- -1(left) +1(right)
     local delta = (yaw < 0) and 1 or -1
     local xShiftMultiplier = math.abs(yaw) / Vars.FREELOOK_MAX_YAW * 2
+
     local x = Vars.FREELOOK_MAX_X_SHIFT * xShiftMultiplier * delta
     local roll = Vars.FREELOOK_MAX_ROLL * (xShiftMultiplier/10) * -delta
 
@@ -223,7 +229,7 @@ function ImmersiveFirstPerson.HandleFreeObservation(relX, relY)
     local pitchProgress = -math.min(0, curPitch / Vars.FREELOOK_MAX_PITCH)
 
     local xShiftMultiplierReduction = 1 - (xShiftMultiplier/ 2)
-    -- the closer we are to looking behind our shoulders the less should be prominent X and Y axises
+    -- the closer we are to looking behind our shoulders the less prominent should be X and Y axises
     local y = -curve(pitchProgress, 0, Vars.FREELOOK_MAX_Y*3, -Vars.FREELOOK_MAX_Y/20) -0.005*xShiftMultiplier
     local z = curve(pitchProgress, 0, (-Vars.FREELOOK_MIN_Z), Vars.FREELOOK_MIN_Z/2) * xShiftMultiplierReduction
 
@@ -272,10 +278,11 @@ function ImmersiveFirstPerson.Init()
         if Config.inner.mouseNativeSensX == -1 or Config.inner.mouseNativeSensX == nil then
             SaveNativeSens()
         end
-        Observe("SettingsMainGameController", "OnVarModified", function(_, a, b)
-            print(a)
-            print(b)
-        end)
+
+        if GameSettings.Get('/controls/fppcameramouse/FPP_MouseX') == 0 then
+            Helpers.UnlockMovement()
+        end
+
         Observe("SettingsMainGameController", "OnUninitialize", function()
             SaveNativeSens()
         end)
@@ -289,7 +296,6 @@ function ImmersiveFirstPerson.Init()
             end
         end)
 
-        local i = 0
         Observe('ScriptedPuppet', 'GetPuppetPS', function()
             if Helpers.IsRestoringCamera() then
                 ImmersiveFirstPerson.RestoreFreeCam()
@@ -304,10 +310,10 @@ function ImmersiveFirstPerson.Init()
             local actionValue = ListenerAction:GetValue(action)
             if Helpers.IsFreeObservation() then
                 if actionName == "CameraMouseY" then
-                    ImmersiveFirstPerson.HandleFreeObservation(0, actionValue)
+                    ImmersiveFirstPerson.HandleFreeLook(0, actionValue)
                 end
                 if actionName == "CameraMouseX" then
-                    ImmersiveFirstPerson.HandleFreeObservation(actionValue, 0)
+                    ImmersiveFirstPerson.HandleFreeLook(actionValue, 0)
                 end
                 return
             end
@@ -354,7 +360,7 @@ function ImmersiveFirstPerson.Init()
         if not inited then
             return
         end
-        if Helpers.IsFreeObservation() and not ShouldSetCamera() and not Helpers.IsRestoringCamera() then
+        if Helpers.IsFreeObservation() and not ShouldSetCamera(Config.inner.freeLookInCombat) and not Helpers.IsRestoringCamera() then
             if Helpers.IsInVehicle() and Helpers.HasBVFP() then
                 return
             end
@@ -392,7 +398,7 @@ function ImmersiveFirstPerson.Init()
         -- IS ENABLED
         isEnabled, IsEnabledToggled = ImGui.Checkbox("Enabled", isEnabled)
         if IsEnabledToggled then
-            if isEnabled and ShouldSetCamera() then
+            if isEnabled and ShouldSetCamera(Config.inner.freeLookInCombat) then
                 ImmersiveFirstPerson.HandleCamera(true)
             elseif not Helpers.IsInVehicle() or (Helpers.IsInVehicle() and not Helpers.HasBVFP()) then
                 ResetCamera()
@@ -407,7 +413,7 @@ function ImmersiveFirstPerson.Init()
         ImGui.SmallButton("WARNING!")
         ImGui.PopStyleColor(3)
         local msg = "If your character stuck during transition,\nload the latest save file and"
-        msg = msg .. " turn off this option.\nThis is caused by some internal game bug and for now is unfixable."
+        msg = msg .. " turn off this option (or try increaing the speed).\nThis is caused by some internal game bug and for now is unfixable."
         TooltipIfHovered(msg)
 
         -- to supress linter
@@ -415,26 +421,35 @@ function ImmersiveFirstPerson.Init()
 
         -- SMOOTH TRANSITION
         Config.inner.smoothRestore, changed = ImGui.Checkbox("Smooth Transition From FreeLook", Config.inner.smoothRestore)
+        TooltipIfHovered(msg)
         if changed then
-            if isEnabled and ShouldSetCamera() then
+            Config.SaveConfig()
+            if isEnabled and ShouldSetCamera(Config.inner.freeLookInCombat) then
                 ImmersiveFirstPerson.HandleCamera(true)
             elseif not Helpers.IsInVehicle() or (Helpers.IsInVehicle() and not Helpers.HasBVFP()) then
                 ResetCamera()
             end
         end
+        if Config.inner.smoothRestore then
+        -- smoothRestore speed
+            Config.inner.smoothRestoreSpeed, changed = ImGui.SliderInt("Transition Speed", math.floor(Config.inner.smoothRestoreSpeed), 1, 100)
+            if changed then
+                Config.SaveConfig()
+            end
+        end
         ImGui.Text("")
 
         -- freelook sensitivity
-        Config.inner.freeLookSensitivity, changed = ImGui.SliderFloat("FreeLook sensitivity", Config.inner.freeLookSensitivity, 1, 100)
+        Config.inner.freeLookSensitivity, changed = ImGui.SliderInt("FreeLook sensitivity", math.floor(Config.inner.freeLookSensitivity), 1, 100)
         if changed then
             Config.SaveConfig()
         end
 
         -- freelook in combat
-        Config.inner.freeLookInCombat, changed = ImGui.Checkbox("Enable FreeLook in combat", Config.inner.freeLookInCombat)
-        if changed then
-            Config.SaveConfig()
-        end
+        -- Config.inner.freeLookInCombat, changed = ImGui.Checkbox("Enable FreeLook in combat", Config.inner.freeLookInCombat)
+        -- if changed then
+        --     Config.SaveConfig()
+        -- end
 
         ImGui.End()
         ImGui.PopStyleVar(1)
@@ -450,7 +465,7 @@ function ImmersiveFirstPerson.Init()
         end
     end)
     registerInput("ifp_freelook", "FreeLook", function(keydown)
-        if not ShouldSetCamera() then
+        if not ShouldSetCamera(Config.inner.freeLookInCombat) then
             return
         end
         local fpp = Helpers.GetFPP()
@@ -469,10 +484,12 @@ function ImmersiveFirstPerson.Init()
             end
 
             lastNativePitch = Helpers.GetPitch()
-            fpp:ResetPitch()
+            if not Config.inner.freeLookInCombat then
+                fpp:ResetPitch()
+            end
             Helpers.SetFreeObservation(true)
             Helpers.LockMovement()
-            ImmersiveFirstPerson.HandleFreeObservation(0, 0)
+            ImmersiveFirstPerson.HandleFreeLook(0, 0)
         else
             ResetFreeLook()
         end
