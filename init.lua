@@ -294,13 +294,13 @@ function ImmersiveFirstPerson.Init()
             Helpers.UnlockMovement()
         end
 
-        Observe("DefaultTransition", "IsPlayerInCombat", function(_, scr)
+        -- Observe("DefaultTransition", "IsPlayerInCombat", function(_, scr)
             -- print("c:", (Game.GetTimeSystem():GetSimTime():ToFloat(Game.GetTimeSystem():GetSimTime())))
         --     for var=1,200 do
         --         Game.GetPlayer():GetFPPCameraComponent():SetLocalOrientation(GetSingleton('EulerAngles'):ToQuat(EulerAngles.new(0, -5.6, 0)))
         --         Game.GetPlayer():GetFPPCameraComponent():SetLocalOrientation(GetSingleton('EulerAngles'):ToQuat(EulerAngles.new(0, math.random(-800000, 800000)/10000, 0)))
         --     end
-        end)
+        -- end)
 
         Observe("SettingsMainGameController", "OnUninitialize", function()
             SaveNativeSens()
@@ -315,11 +315,8 @@ function ImmersiveFirstPerson.Init()
             end
         end)
 
-        Observe('ScriptedPuppet', 'GetPuppetPS', function()
-            if Helpers.IsRestoringCamera() then
-                ImmersiveFirstPerson.RestoreFreeCam()
-            end
-        end)
+        -- Observe('ScriptedPuppet', 'GetPuppetPS', function()
+        -- end)
 
         Observe('PlayerPuppet', 'OnAction', function(action)
             -- print("a:", (Game.GetTimeSystem():GetSimTime():ToFloat(Game.GetTimeSystem():GetSimTime())))
@@ -369,6 +366,10 @@ function ImmersiveFirstPerson.Init()
 
     registerForEvent("onUpdate", function(delta)
         Cron.Update(delta)
+
+        if Helpers.IsRestoringCamera() then
+            ImmersiveFirstPerson.RestoreFreeCam()
+        end
 
         --     for var=1,300 do
         --         Game.GetPlayer():GetFPPCameraComponent():SetLocalOrientation(GetSingleton('EulerAngles'):ToQuat(EulerAngles.new(0, -5.6, 0)))
