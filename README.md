@@ -1,4 +1,4 @@
-# LessUnimmersiveFirstPerson
+# ImmersiveFirstPerson
 
 This mod makes it easier to investigate V's body when looking down.  
 *Works best with higher FOV.*
@@ -14,3 +14,8 @@ The camera is adaptive, so you don't have to worry about clipping. Camera will o
 
 1. Make sure you've installed Cyber Engine Tweaks.
 2. Drop the content of an archive into your cyberpunk directory (where the "bin" folder is).
+
+----
+
+This project contains files that are parts of MIT licensed project [cp2077-cet-kit](https://github.com/psiberx/cp2077-cet-kit).  
+See full license details [here](https://github.com/psiberx/cp2077-cet-kit/blob/main/LICENSE).  
