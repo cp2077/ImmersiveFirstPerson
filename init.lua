@@ -257,7 +257,18 @@ function SaveNativeSens()
     Config.inner.mouseNativeSensY = GameSettings.Get('/controls/fppcameramouse/FPP_MouseY')
     Config.SaveConfig()
 end
+-- gamestateMachineGameScriptInterface
+-- StateGameScriptInterface extends StateScriptInterface
+-- ublic final native func GetObjectFromComponent(targetingComponent: ref<IPlacedComponent>) -> ref<GameObject>
+-- public final native func Teleport(objectToTeleport: ref<GameObject>, position: Vector4, orientation: EulerAngles) -> Void
+-- Game.GetTeleportationFacility():Teleport(playerPuppet, position, rotation)
 
+-- fpp = Game.GetPlayer():GetFPPCameraComponent()
+
+-- c = GetSingleton("gamestateMachineGameScriptInterface"):TestCam(-10)
+-- c = GetSingleton("gamestateMachineGameScriptInterface"):TestCam(EulerAngles.new(0, -15.6, 0))
+-- c:SetOrientationEuler(EulerAngles.new(0, -15.6, 0))
+-- Game.GetPlayer():TestCam(GetSingleton("gamestateMachineGameScriptInterface"):GetCameraWorldTransform(), -10)
 -- INIT
 function ImmersiveFirstPerson.Init()
     registerForEvent("onShutdown", function()
@@ -283,6 +294,14 @@ function ImmersiveFirstPerson.Init()
             Helpers.UnlockMovement()
         end
 
+        Observe("DefaultTransition", "IsPlayerInCombat", function(_, scr)
+            -- print("c:", (Game.GetTimeSystem():GetSimTime():ToFloat(Game.GetTimeSystem():GetSimTime())))
+        --     for var=1,200 do
+        --         Game.GetPlayer():GetFPPCameraComponent():SetLocalOrientation(GetSingleton('EulerAngles'):ToQuat(EulerAngles.new(0, -5.6, 0)))
+        --         Game.GetPlayer():GetFPPCameraComponent():SetLocalOrientation(GetSingleton('EulerAngles'):ToQuat(EulerAngles.new(0, math.random(-800000, 800000)/10000, 0)))
+        --     end
+        end)
+
         Observe("SettingsMainGameController", "OnUninitialize", function()
             SaveNativeSens()
         end)
@@ -303,7 +322,7 @@ function ImmersiveFirstPerson.Init()
         end)
 
         Observe('PlayerPuppet', 'OnAction', function(action)
-            -- TODO: we could make a free observable camera, like in day-z or some shit
+            -- print("a:", (Game.GetTimeSystem():GetSimTime():ToFloat(Game.GetTimeSystem():GetSimTime())))
             local ListenerAction = GetSingleton('gameinputScriptListenerAction')
             local actionName = Game.NameToString(ListenerAction:GetName(action))
             local actionType = ListenerAction:GetType(action).value -- gameinputActionType
@@ -379,6 +398,7 @@ function ImmersiveFirstPerson.Init()
     end
 
     registerForEvent("onDraw", function()
+        -- print("u:", (Game.GetTimeSystem():GetSimTime():ToFloat(Game.GetTimeSystem():GetSimTime())))
         -- print("-", Game.GetSimTime():ToFloat(Game.GetSimTime()))
         -- for var=1,1000000 do
         --     if var == 1000000 then
