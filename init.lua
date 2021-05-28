@@ -32,7 +32,7 @@ local lastPitch = 0
 function ShouldSetCamera(ignoreWeapon)
     if ignoreWeapon == nil then ignoreWeapon = false end
     local isCutScene = Helpers.GetSceneTier() >= 4
-    return not isCutScene and not Helpers.IsInVehicle() and (not Helpers.HasWeapon() or ignoreWeapon) and not Helpers.IsCarryingBody()
+    return not Helpers.IsSwimming() and not isCutScene and not Helpers.IsInVehicle() and (not Helpers.HasWeapon() or ignoreWeapon) and not Helpers.IsCarryingBody()
 end
 function IsCrouching()
     return Game.GetPlayer():GetPS():IsCrouch()

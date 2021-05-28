@@ -173,6 +173,12 @@ function Helpers.IsInVehicle()
             and Helpers.HasMountedVehicle()
 end
 
+function Helpers.IsSwimming()
+    local blackboardDefs = Game.GetAllBlackboardDefs()
+    local blackboardPSM = Game.GetBlackboardSystem():GetLocalInstanced(Game.GetPlayer():GetEntityID(), blackboardDefs.PlayerStateMachine)
+    return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Swimming) > 0
+end
+
 function Helpers.GetSceneTier()
     local blackboardDefs = Game.GetAllBlackboardDefs()
     local blackboardPSM = Game.GetBlackboardSystem():GetLocalInstanced(Game.GetPlayer():GetEntityID(), blackboardDefs.PlayerStateMachine)
