@@ -179,6 +179,10 @@ function Helpers.IsSwimming()
     return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Swimming) > 0
 end
 
+function Helpers.IsYInverted()
+    return GameSettings.Get('/controls/fppcameramouse/FPP_MouseInvertY')
+end
+
 function Helpers.GetSceneTier()
     local blackboardDefs = Game.GetAllBlackboardDefs()
     local blackboardPSM = Game.GetBlackboardSystem():GetLocalInstanced(Game.GetPlayer():GetEntityID(), blackboardDefs.PlayerStateMachine)
