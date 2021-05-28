@@ -182,6 +182,9 @@ end
 function Helpers.IsYInverted()
     return GameSettings.Get('/controls/fppcameramouse/FPP_MouseInvertY')
 end
+function Helpers.IsXInverted()
+    return GameSettings.Get('/controls/fppcameramouse/FPP_MouseInvertX')
+end
 
 function Helpers.GetSceneTier()
     local blackboardDefs = Game.GetAllBlackboardDefs()

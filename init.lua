@@ -14,6 +14,7 @@ local initialFOV = 68
 local isOverlayOpen = false
 local isEnabled = true
 local isYInverted = false
+local isXInverted = false
 
 function CombatFreeLook()
     return Config.inner.freeLookInCombat
@@ -287,6 +288,7 @@ function ImmersiveFirstPerson.Init()
         Config.InitConfig()
         defaultFOV = Helpers.GetFOV()
         isYInverted = Helpers.IsYInverted()
+        isXInverted = Helpers.IsXInverted()
 
         if Config.inner.mouseNativeSensX == -1 or Config.inner.mouseNativeSensX == nil then
             SaveNativeSens()
@@ -307,6 +309,7 @@ function ImmersiveFirstPerson.Init()
         Observe("SettingsMainGameController", "OnUninitialize", function()
             SaveNativeSens()
             isYInverted = Helpers.IsYInverted()
+            isXInverted = Helpers.IsXInverted()
         end)
 
         Observe('RadialWheelController', 'RegisterBlackboards', function(_, loaded)
@@ -332,7 +335,7 @@ function ImmersiveFirstPerson.Init()
                     ImmersiveFirstPerson.HandleFreeLook(0, actionValue * (isYInverted and -1 or 1))
                 end
                 if actionName == "CameraMouseX" then
-                    ImmersiveFirstPerson.HandleFreeLook(actionValue, 0)
+                    ImmersiveFirstPerson.HandleFreeLook(actionValue * (isXInverted and -1 or 1), 0)
                 end
                 return
             end
