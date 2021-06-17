@@ -322,10 +322,17 @@ function ImmersiveFirstPerson.Init()
             end
         end)
 
-        -- Observe('ScriptedPuppet', 'GetPuppetPS', function()
-        -- end)
+        local cetVer = tonumber((GetVersion():gsub('^v(%d+)%.(%d+)%.(%d+)(.*)', function(major, minor, patch, wip)
+            return ('%d.%02d%02d%d'):format(major, minor, patch, (wip == '' and 0 or 1))
+        end))) or 1.12
 
-        Observe('PlayerPuppet', 'OnAction', function(action)
+        Observe('PlayerPuppet', 'OnAction', function(a, b)
+            -- TODO: not sure if this is redundant
+            local action = a
+            if cetVer >= 1.14 then
+                action = b
+            end
+
             -- print("a:", (Game.GetTimeSystem():GetSimTime():ToFloat(Game.GetTimeSystem():GetSimTime())))
             local ListenerAction = GetSingleton('gameinputScriptListenerAction')
             local actionName = Game.NameToString(ListenerAction:GetName(action))
