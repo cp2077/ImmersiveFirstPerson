@@ -1,4 +1,4 @@
-local ImmersiveFirstPerson = { version = "1.0.0" }
+local ImmersiveFirstPerson = { version = "1.0.2" }
 local Cron = require("Modules/Cron")
 local GameSettings = require("Modules/GameSettings")
 local Vars = require("Modules/Vars")
