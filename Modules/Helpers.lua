@@ -35,13 +35,11 @@ end
 function Helpers.GetFPP()
     local player = Game.GetPlayer()
     if player == nil then
-        Helpers.PrintMsg("couldn't get Player")
         return
     end
 
     local fpp = player:GetFPPCameraComponent()
     if fpp == nil then
-        return Helpers.PrintMsg("couldn't get FPP")
     end
 
     return fpp
@@ -50,7 +48,6 @@ end
 function Helpers.ResetCamera(defaultFOV)
     local fpp = Helpers.GetFPP()
     if fpp == nil then
-        Helpers.PrintMsg("Helpers.ResetCamera: couldn't get FPP")
         return
     end
 
@@ -64,7 +61,6 @@ end
 function Helpers.SetCamera(x, y, z, roll, pitch, yaw, fov)
     local fpp = Helpers.GetFPP()
     if not fpp then
-        Helpers.PrintMsg("Helpers.SetCamera: couldn't get FPP")
         return
     end
 
@@ -91,7 +87,6 @@ function Helpers.GetPitch()
     local ok, res = pcall(function()
         local fpp = Helpers.GetFPP()
         if not fpp then
-            Helpers.PrintMsg("Helpers.SetCamera: couldn't get FPP")
             return
         end
 
@@ -115,7 +110,6 @@ end
 function Helpers.GetFOV()
     local fpp = Helpers.GetFPP()
     if not fpp then
-        Helpers.PrintMsg("Helpers.SetCamera: couldn't get FPP")
         return
     end
 
@@ -123,7 +117,6 @@ function Helpers.GetFOV()
 
     -- TODO: fix
     if fov < 10 then
-        Helpers.PrintMsg("Helpers.GetFOV: received invalid invalid fov (<10)")
         fov = 68
     end
 
@@ -159,24 +152,52 @@ end
 ------------------
 
 function Helpers.HasMountedVehicle()
-    return not not Game['GetMountedVehicle;GameObject'](Game.GetPlayer())
+    local player = Game.GetPlayer()
+    return player and (not not Game['GetMountedVehicle;GameObject'](player))
 end
+
 function Helpers.IsPlayerDriver()
-    local veh = Game['GetMountedVehicle;GameObject'](Game.GetPlayer())
-    if veh then
-        return veh:IsPlayerDriver()
+    local player = Game.GetPlayer()
+    if player then
+        local veh = Game['GetMountedVehicle;GameObject'](player)
+        if veh then
+            return veh:IsPlayerDriver()
+        end
     end
 end
+
+-- return Player, blackboardDefs and blackboardSystem if all of them are present, otherwise nil
+function GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
+    local player = Game.GetPlayer()
+    if player then
+        local blackboardDefs = Game.GetAllBlackboardDefs()
+        if blackboardDefs then
+            local blackboardSystem = Game.GetBlackboardSystem()
+            if blackboardSystem then
+                return player, blackboardDefs, blackboardSystem
+            end
+        end
+    end
+end
+
 function Helpers.IsInVehicle()
-    return Game.GetWorkspotSystem():IsActorInWorkspot(Game.GetPlayer())
-            and Game.GetWorkspotSystem():GetExtendedInfo(Game.GetPlayer()).isActive
+    local player = Game.GetPlayer()
+    if player then
+        local workspotSystem = Game.GetWorkspotSystem()
+        return workspotSystem and workspotSystem:IsActorInWorkspot(player)
+            and workspotSystem:GetExtendedInfo(player).isActive
             and Helpers.HasMountedVehicle()
+    end
+    return false
 end
 
 function Helpers.IsSwimming()
-    local blackboardDefs = Game.GetAllBlackboardDefs()
-    local blackboardPSM = Game.GetBlackboardSystem():GetLocalInstanced(Game.GetPlayer():GetEntityID(), blackboardDefs.PlayerStateMachine)
-    return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Swimming) > 0
+    local player, blackboardDefs, blackboardSystem = GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
+    if player then
+        local blackboardPSM = blackboardSystem:GetLocalInstanced(player:GetEntityID(), blackboardDefs.PlayerStateMachine)
+        return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Swimming) > 0
+    end
+    return false
 end
 
 function Helpers.IsYInverted()
@@ -186,28 +207,48 @@ function Helpers.IsXInverted()
     return GameSettings.Get('/controls/fppcameramouse/FPP_MouseInvertX')
 end
 
+-- Undefined = 0
+-- Tier1_FullGameplay = 1
+-- Tier2_StagedGameplay = 2
+-- Tier3_LimitedGameplay = 3
+-- Tier4_FPPCinematic = 4
+-- Tier5_Cinematic = 5
 function Helpers.GetSceneTier()
-    local blackboardDefs = Game.GetAllBlackboardDefs()
-    local blackboardPSM = Game.GetBlackboardSystem():GetLocalInstanced(Game.GetPlayer():GetEntityID(), blackboardDefs.PlayerStateMachine)
-    return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.SceneTier)
+    local player, blackboardDefs, blackboardSystem = GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
+    if player then
+        local blackboardPSM = blackboardSystem:GetLocalInstanced(player:GetEntityID(), blackboardDefs.PlayerStateMachine)
+        return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.SceneTier)
+    end
+    return 0
 end
 
 function Helpers.IsCarryingBody()
-    local blackboardDefs = Game.GetAllBlackboardDefs()
-    local blackboardPSM = Game.GetBlackboardSystem():GetLocalInstanced(Game.GetPlayer():GetEntityID(), blackboardDefs.PlayerStateMachine)
-    -- .Carrying
-    return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.BodyCarrying) > 0
+    local player, blackboardDefs, blackboardSystem = GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
+    if player then
+        local blackboardPSM = blackboardSystem:GetLocalInstanced(player:GetEntityID(), blackboardDefs.PlayerStateMachine)
+        return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.BodyCarrying) > 0
+    end
+
+    return false
 end
+
+-- TODO: implement fully?
 function Helpers.IsCarrying()
-    local blackboardDefs = Game.GetAllBlackboardDefs()
-    local blackboardPSM = Game.GetBlackboardSystem():GetLocalInstanced(Game.GetPlayer():GetEntityID(), blackboardDefs.PlayerStateMachine)
-    print(blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Carrying))
-    return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Carrying) > 0
+    local player, blackboardDefs, blackboardSystem = GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
+    if player then
+        local blackboardPSM = blackboardSystem:GetLocalInstanced(player:GetEntityID(), blackboardDefs.PlayerStateMachine)
+        print(blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Carrying))
+        return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Carrying) > 0
+    end
 end
 
 function Helpers.HasWeapon()
-    local ts = Game.GetTransactionSystem()
-    return ts:GetItemInSlot(Game.GetPlayer(), TweakDBID.new("AttachmentSlots.WeaponRight")) ~= nil
+    local player = Game.GetPlayer()
+    if player then
+        local ts = Game.GetTransactionSystem()
+        return ts and ts:GetItemInSlot(player, TweakDBID.new("AttachmentSlots.WeaponRight")) ~= nil
+    end
+    return false
 end
 
 return Helpers

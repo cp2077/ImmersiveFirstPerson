@@ -1,4 +1,4 @@
-local ImmersiveFirstPerson = { version = "1.0.2" }
+local ImmersiveFirstPerson = { version = "1.0.3" }
 local Cron = require("Modules/Cron")
 local GameSettings = require("Modules/GameSettings")
 local Vars = require("Modules/Vars")
@@ -33,9 +33,9 @@ end
 local lastPitch = 0
 function ShouldSetCamera(ignoreWeapon)
     if ignoreWeapon == nil then ignoreWeapon = false end
-    -- local isCutScene = Helpers.GetSceneTier() >= 4
-    local isCutScene = Helpers.GetSceneTier() >= 3
-    return not Helpers.IsSwimming() and not isCutScene and not Helpers.IsInVehicle() and (not Helpers.HasWeapon() or ignoreWeapon) and not Helpers.IsCarryingBody()
+    local sceneTier = Helpers.GetSceneTier()
+    local isFullGameplayScene = sceneTier > 0 and sceneTier < 3
+    return isFullGameplayScene and not Helpers.IsSwimming() and not Helpers.IsInVehicle() and (not Helpers.HasWeapon() or ignoreWeapon) and not Helpers.IsCarryingBody()
 end
 function IsCrouching()
     return Game.GetPlayer():GetPS():IsCrouch()
@@ -326,6 +326,24 @@ function ImmersiveFirstPerson.Init()
             return ('%d.%02d%02d%d'):format(major, minor, patch, (wip == '' and 0 or 1))
         end))) or 1.12
 
+        Observe('PlayerPuppet', 'OnGameAttached', function(self, b)
+          self:RegisterInputListener(self, "CameraMouseY")
+          self:RegisterInputListener(self, "CameraMouseX")
+          self:RegisterInputListener(self, "CameraMouseY")
+          self:RegisterInputListener(self, "right_stick_y")
+          self:RegisterInputListener(self, "CameraY")
+          self:RegisterInputListener(self, "UI_MoveY_Axis")
+          self:RegisterInputListener(self, "MeleeBlock")
+          self:RegisterInputListener(self, "RangedADS")
+          self:RegisterInputListener(self, "CameraAim")
+          self:RegisterInputListener(self, "MeleeAttack")
+          self:RegisterInputListener(self, "RangedAttack")
+          self:RegisterInputListener(self, "mouse_left")
+          self:RegisterInputListener(self, "click")
+          self:RegisterInputListener(self, "SwitchItem")
+          self:RegisterInputListener(self, "WeaponWheel")
+        end)
+
         Observe('PlayerPuppet', 'OnAction', function(a, b)
             -- TODO: not sure if this is redundant
             local action = a
@@ -347,7 +365,6 @@ function ImmersiveFirstPerson.Init()
                 end
                 return
             end
-
 
             -- TODO: Test it!
             -- if actionName == "CameraAim" or actionName == "SwitchItem" or actionName == "WeaponWheel" then
