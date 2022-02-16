@@ -1,5 +1,6 @@
-local ImmersiveFirstPerson = { version = "1.0.3" }
+local ImmersiveFirstPerson = { version = "1.1.2" }
 local Cron = require("Modules/Cron")
+local GameSession = require("Modules/GameSession")
 local GameSettings = require("Modules/GameSettings")
 local Vars = require("Modules/Vars")
 local Easings = require("Modules/Easings")
@@ -13,8 +14,30 @@ local defaultFOV = 68
 local initialFOV = 68
 local isOverlayOpen = false
 local isEnabled = true
+local isDisabledByApi = false
 local isYInverted = false
 local isXInverted = false
+
+local API = {}
+
+function API.Enable()
+  isDisabledByApi = false
+  isEnabled = true
+  if ShouldSetCamera(Config.inner.freeLookInCombat) then
+    ImmersiveFirstPerson.HandleCamera(true)
+  end
+end
+
+function API.Disable()
+  isEnabled = false
+  isDisabledByApi = true
+  ResetCamera()
+  ResetFreeLook()
+end
+
+function API.IsEnabled()
+  return isEnabled
+end
 
 function CombatFreeLook()
     return Config.inner.freeLookInCombat
@@ -30,13 +53,29 @@ function ResetCamera(force)
     end
 end
 
+--- Check third party mods
+function blockingThirdPartyMods()
+  local gtaTravel = GetMod("gtaTravel")
+  if gtaTravel and gtaTravel.api and not gtaTravel.api.done then
+    return true
+  end
+
+  return false
+end
+
 local lastPitch = 0
 function ShouldSetCamera(ignoreWeapon)
     if ignoreWeapon == nil then ignoreWeapon = false end
     local sceneTier = Helpers.GetSceneTier()
     local isFullGameplayScene = sceneTier > 0 and sceneTier < 3
-    return isFullGameplayScene and not Helpers.IsSwimming() and not Helpers.IsInVehicle() and (not Helpers.HasWeapon() or ignoreWeapon) and not Helpers.IsCarryingBody()
+    return isFullGameplayScene
+        and (not Helpers.HasWeapon() or ignoreWeapon)
+        and not Helpers.IsInVehicle()
+        and not Helpers.IsSwimming()
+        and not blockingThirdPartyMods()
+        and not Helpers.IsCarryingBody()
 end
+
 function IsCrouching()
     return Game.GetPlayer():GetPS():IsCrouch()
 end
@@ -313,13 +352,26 @@ function ImmersiveFirstPerson.Init()
             isXInverted = Helpers.IsXInverted()
         end)
 
-        Observe('RadialWheelController', 'RegisterBlackboards', function(_, loaded)
-            isLoaded = loaded
-            if loaded then
-                defaultFOV = Helpers.GetFOV()
-            else
-                ResetCamera(true)
-            end
+        GameSession.OnStart(function()
+          isLoaded = true
+          defaultFOV = Helpers.GetFOV()
+        end)
+        GameSession.OnResume(function()
+          isLoaded = true
+          defaultFOV = Helpers.GetFOV()
+        end)
+
+        GameSession.OnEnd(function()
+          isLoaded = false
+          ResetCamera(true)
+        end)
+        GameSession.OnDeath(function()
+          isLoaded = false
+          ResetCamera()
+        end)
+        GameSession.OnPause(function()
+          isLoaded = false
+          ResetCamera()
         end)
 
         local cetVer = tonumber((GetVersion():gsub('^v(%d+)%.(%d+)%.(%d+)(.*)', function(major, minor, patch, wip)
@@ -345,6 +397,10 @@ function ImmersiveFirstPerson.Init()
         end)
 
         Observe('PlayerPuppet', 'OnAction', function(a, b)
+            if not isLoaded then
+              return
+            end
+
             -- TODO: not sure if this is redundant
             local action = a
             if cetVer >= 1.14 then
@@ -354,7 +410,7 @@ function ImmersiveFirstPerson.Init()
             -- print("a:", (Game.GetTimeSystem():GetSimTime():ToFloat(Game.GetTimeSystem():GetSimTime())))
             local ListenerAction = GetSingleton('gameinputScriptListenerAction')
             local actionName = Game.NameToString(ListenerAction:GetName(action))
-            local actionType = ListenerAction:GetType(action).value -- gameinputActionType
+            -- local actionType = ListenerAction:GetType(action).value -- gameinputActionType
             local actionValue = ListenerAction:GetValue(action)
             if Helpers.IsFreeObservation() then
                 if actionName == "CameraMouseY" then
@@ -366,37 +422,37 @@ function ImmersiveFirstPerson.Init()
                 return
             end
 
-            -- TODO: Test it!
-            -- if actionName == "CameraAim" or actionName == "SwitchItem" or actionName == "WeaponWheel" then
-            --     Cron.After(0.20, function ()
-            --         ImmersiveFirstPerson.HandleCamera()
-            --     end)
-            -- end
-
-            if actionName == "CameraMouseY" or
-                actionName == "right_stick_y" or
-                actionName == "CameraY" or
-                actionName == "UI_MoveY_Axis" or
-                actionName == "MeleeBlock" or
-                actionName == "RangedADS" or
-                actionName == "CameraAim" or
-                actionName == "MeleeAttack" or
-                actionName == "RangedAttack" or
-                actionName == "mouse_left" or
-                actionName == "click" or
-                actionName == "SwitchItem" or
-                actionName == "WeaponWheel" then
-                ImmersiveFirstPerson.HandleCamera()
+            if actionName == "CameraMouseY"
+               or actionName == "right_stick_y"
+               or actionName == "CameraY"
+               or actionName == "UI_MoveY_Axis"
+               or actionName == "MeleeBlock"
+               or actionName == "RangedADS"
+               or actionName == "CameraAim"
+               or actionName == "MeleeAttack"
+               or actionName == "RangedAttack"
+               or actionName == "mouse_left"
+               or actionName == "click"
+               or actionName == "SwitchItem"
+               or actionName == "WeaponWheel"
+               then
+                 ImmersiveFirstPerson.HandleCamera()
             end
         end)
 
         Cron.Every(0.65, function ()
-            ImmersiveFirstPerson.HandleCamera()
+            if isLoaded then
+              ImmersiveFirstPerson.HandleCamera()
+            end
         end)
     end)
 
     registerForEvent("onUpdate", function(delta)
         Cron.Update(delta)
+
+        if not isLoaded then
+          return
+        end
 
         if Helpers.IsRestoringCamera() then
             ImmersiveFirstPerson.RestoreFreeCam()
@@ -517,6 +573,10 @@ function ImmersiveFirstPerson.Init()
         end
     end)
     registerInput("ifp_freelook", "FreeLook", function(keydown)
+        if isDisabledByApi then
+          return
+        end
+
         if not ShouldSetCamera(Config.inner.freeLookInCombat) then
             return
         end
@@ -555,7 +615,10 @@ function ImmersiveFirstPerson.Init()
         isOverlayOpen = false
     end)
 
-    return { ["version"] = ImmersiveFirstPerson.version }
+    return {
+      version = ImmersiveFirstPerson.version,
+      api = API,
+    }
 end
 
 return ImmersiveFirstPerson.Init()

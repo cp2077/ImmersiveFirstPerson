@@ -237,7 +237,6 @@ function Helpers.IsCarrying()
     local player, blackboardDefs, blackboardSystem = GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
     if player then
         local blackboardPSM = blackboardSystem:GetLocalInstanced(player:GetEntityID(), blackboardDefs.PlayerStateMachine)
-        print(blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Carrying))
         return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Carrying) > 0
     end
 end
