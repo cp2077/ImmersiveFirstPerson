@@ -9,6 +9,7 @@ local Config = {
         mouseNativeSensX = -1,
         mouseNativeSensY = -1,
         smoothRestoreSpeed = 15,
+        dontChangeFov = false,
     },
     isReady = false,
 }
@@ -30,6 +31,9 @@ function Config.SaveConfig()
 end
 
 function Migrate()
+    if Config.inner.dontChangeFov == nil then
+      Config.inner.dontChangeFov = false
+    end
     -- ...
     WriteConfig()
 end

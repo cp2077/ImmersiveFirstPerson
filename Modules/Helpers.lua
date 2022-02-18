@@ -58,6 +58,17 @@ function Helpers.ResetCamera(defaultFOV)
     end
 end
 
+function Helpers.ResetFOV(fov)
+    local fpp = Helpers.GetFPP()
+    if fpp == nil then
+        return
+    end
+
+    if fov then
+        fpp:SetFOV(fov)
+    end
+end
+
 function Helpers.SetCamera(x, y, z, roll, pitch, yaw, fov)
     local fpp = Helpers.GetFPP()
     if not fpp then

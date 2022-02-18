@@ -1,4 +1,4 @@
-local ImmersiveFirstPerson = { version = "1.1.2" }
+local ImmersiveFirstPerson = { version = "1.2.0" }
 local Cron = require("Modules/Cron")
 local GameSession = require("Modules/GameSession")
 local GameSettings = require("Modules/GameSettings")
@@ -21,18 +21,18 @@ local isXInverted = false
 local API = {}
 
 function API.Enable()
-  isDisabledByApi = false
-  isEnabled = true
-  if ShouldSetCamera(Config.inner.freeLookInCombat) then
-    ImmersiveFirstPerson.HandleCamera(true)
-  end
+    isDisabledByApi = false
+    isEnabled = true
+    if ShouldSetCamera(Config.inner.freeLookInCombat) then
+        ImmersiveFirstPerson.HandleCamera(true)
+    end
 end
 
 function API.Disable()
-  isEnabled = false
-  isDisabledByApi = true
-  ResetCamera()
-  ResetFreeLook()
+    isEnabled = false
+    isDisabledByApi = true
+    ResetCamera()
+    ResetFreeLook()
 end
 
 function API.IsEnabled()
@@ -45,22 +45,29 @@ end
 
 -- Helpers
 
+function defaultFovOrNil()
+    if not Config.inner.dontChangeFov then
+      return defaultFOV
+    end
+    return nil
+end
+
 local wasReset = true
 function ResetCamera(force)
     if not wasReset or force then
-        Helpers.ResetCamera(defaultFOV)
+        Helpers.ResetCamera(defaultFovOrNil())
         wasReset = true
     end
 end
 
 --- Check third party mods
 function blockingThirdPartyMods()
-  local gtaTravel = GetMod("gtaTravel")
-  if gtaTravel and gtaTravel.api and not gtaTravel.api.done then
-    return true
-  end
+    local gtaTravel = GetMod("gtaTravel")
+    if gtaTravel and gtaTravel.api and not gtaTravel.api.done then
+        return true
+    end
 
-  return false
+    return false
 end
 
 local lastPitch = 0
@@ -144,10 +151,14 @@ function ImmersiveFirstPerson.HandleCamera(force)
     -- shift changes based on FOV, so we take this into account
     local fovShiftCorrection = Helpers.GetFOV()/68.23
 
+    local f = Helpers.GetFOV()
+    -- TODO: fuck you
+    local poopshit = (68 / f- 1) * 0.22
+
     -- at the beginning camera goes way too hard down and can clip through stuff like nomad goggles.
     -- we try to minimize this effect with these multipliers
     local shiftInitialSlowDown = math.min(1, (progress/Vars.STOP_SHIFT_BOOST_AT))
-    local shift = math.min(1, progress * 4.0) * Vars.SHIFT_BASE_VALUE * fovShiftCorrection * crouchMultShift * shiftInitialSlowDown
+    local shift = math.min(1, progress * 4.0) * Vars.SHIFT_BASE_VALUE * crouchMultShift * shiftInitialSlowDown + poopshit
 
     -- Height goes gradually from 0 to N to -N
     local heightInitialBoost = math.max(-0.16, 5*progress - math.max(0, (progress-Vars.HEIGHT_INCREASE_KEY_POINT)*8.5))
@@ -162,6 +173,10 @@ function ImmersiveFirstPerson.HandleCamera(force)
 
     local f = 68.23 - defaultFOV
     local fov = math.floor(defaultFOV + f*math.min(1, progress * 2) + ((math.min(1, progress * 1)) * Vars.FOV_BASE_VALUE))
+    if Config.inner.dontChangeFov then
+        fov = nil
+    end
+
     Helpers.SetCamera(nil, height, shift, nil, lean, nil, fov)
 end
 
@@ -270,21 +285,29 @@ function ImmersiveFirstPerson.HandleFreeLook(relX, relY)
     -- as we look down we need to move camera sligthly forwards
     local pitchProgress = -math.min(0, curPitch / Vars.FREELOOK_MAX_PITCH)
 
+    local f = Helpers.GetFOV()
+    -- TODO: fuck you
+    local poopshit = (68 / f - 1) * 0.01
     local xShiftMultiplierReduction = 1 - (xShiftMultiplier/ 2)
     -- the closer we are to looking behind our shoulders the less prominent should be X and Y axises
-    local y = -curve(pitchProgress, 0, Vars.FREELOOK_MAX_Y*3, -Vars.FREELOOK_MAX_Y/20) -0.005*xShiftMultiplier
-    local z = curve(pitchProgress, 0, (-Vars.FREELOOK_MIN_Z), Vars.FREELOOK_MIN_Z/2) * xShiftMultiplierReduction
+    local y = -curve(pitchProgress, 0, Vars.FREELOOK_MAX_Y*3, -Vars.FREELOOK_MAX_Y/20-0.05) -0.005*xShiftMultiplier
+
+    local z = curve(pitchProgress, 0, (-Vars.FREELOOK_MIN_Z), Vars.FREELOOK_MIN_Z/2  + 0.02 + poopshit*30) * xShiftMultiplierReduction
 
     local defaultFOVFixed = defaultFOV + 2
     local f = 68.23 - defaultFOVFixed
 
     local fov = math.floor(defaultFOVFixed + f*math.min(1, pitchProgress * 2) + ((math.min(1, pitchProgress)) * -8))
+    if Config.inner.dontChangeFov then
+        fov = nil
+    end
+
 
     Helpers.SetCamera(x, y, z, roll, pitch, yaw, fov)
 end
 
 function ResetFreeLook()
-    Helpers.SetCamera(nil, nil, nil, nil, nil, nil, defaultFOV)
+    Helpers.SetCamera(nil, nil, nil, nil, nil, nil, defaultFovOrNil())
     Helpers.SetRestoringCamera(true)
     Helpers.UnlockMovement()
     lastNativePitchUsed = false
@@ -319,7 +342,7 @@ function ImmersiveFirstPerson.Init()
         if fpp then
             fpp:ResetPitch()
             ImmersiveFirstPerson.RestoreFreeCam()
-            Helpers.SetCamera(nil, nil, nil, nil, nil, nil, defaultFOV)
+            Helpers.SetCamera(nil, nil, nil, nil, nil, nil, defaultFovOrNil())
         end
         ResetCamera()
     end)
@@ -514,6 +537,17 @@ function ImmersiveFirstPerson.Init()
         end
         ImGui.Text("")
 
+        -- dont change fov
+        Config.inner.dontChangeFov, changed = ImGui.Checkbox("Don't change FOV (may cause clipping)", Config.inner.dontChangeFov)
+        if changed then
+            Config.SaveConfig()
+            if isEnabled and isLoaded then
+                if Config.inner.dontChangeFov then
+                  Helpers.ResetFOV(defaultFOV)
+                end
+            end
+        end
+
         -- WARNING ABOUT TRANSITION
         ImGui.PushStyleColor(ImGuiCol.Button, 0.60, 0.20, 0.30, 0.8)
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0.60, 0.20, 0.30, 0.8)
@@ -521,14 +555,14 @@ function ImmersiveFirstPerson.Init()
         ImGui.SmallButton("WARNING!")
         ImGui.PopStyleColor(3)
         local msg = "If your character stuck during transition,\nload the latest save file and"
-        msg = msg .. " turn off this option (or try increaing the speed).\nThis is caused by some internal game bug and for now is unfixable."
+        msg = msg .. " then either turn this option off or increase the transition speed.\nThis is caused by internal game bug and for now is unfixable."
         TooltipIfHovered(msg)
 
         -- to supress linter
         local changed = false
 
         -- SMOOTH TRANSITION
-        Config.inner.smoothRestore, changed = ImGui.Checkbox("Smooth Transition From FreeLook", Config.inner.smoothRestore)
+        Config.inner.smoothRestore, changed = ImGui.Checkbox("Smooth transition for FreeLook", Config.inner.smoothRestore)
         TooltipIfHovered(msg)
         if changed then
             Config.SaveConfig()
@@ -540,7 +574,7 @@ function ImmersiveFirstPerson.Init()
         end
         if Config.inner.smoothRestore then
         -- smoothRestore speed
-            Config.inner.smoothRestoreSpeed, changed = ImGui.SliderInt("Transition Speed", math.floor(Config.inner.smoothRestoreSpeed), 1, 100)
+            Config.inner.smoothRestoreSpeed, changed = ImGui.SliderInt("Transition speed", math.floor(Config.inner.smoothRestoreSpeed), 1, 200)
             if changed then
                 Config.SaveConfig()
             end
