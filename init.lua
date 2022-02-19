@@ -62,10 +62,10 @@ end
 
 --- Check third party mods
 function blockingThirdPartyMods()
-    local gtaTravel = GetMod("gtaTravel")
-    if gtaTravel and gtaTravel.api and not gtaTravel.api.done then
-        return true
-    end
+    -- local gtaTravel = GetMod("gtaTravel")
+    -- if gtaTravel and gtaTravel.api and not gtaTravel.api.done then
+    --     return true
+    -- end
 
     return false
 end
