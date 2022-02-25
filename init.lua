@@ -1,4 +1,4 @@
-local ImmersiveFirstPerson = { version = "1.2.0" }
+local ImmersiveFirstPerson = { version = "1.2.1" }
 local Cron = require("Modules/Cron")
 local GameSession = require("Modules/GameSession")
 local GameSettings = require("Modules/GameSettings")
@@ -294,7 +294,7 @@ function ImmersiveFirstPerson.HandleFreeLook(relX, relY)
 
     local z = curve(pitchProgress, 0, (-Vars.FREELOOK_MIN_Z), Vars.FREELOOK_MIN_Z/2  + 0.02 + poopshit*30) * xShiftMultiplierReduction
 
-    local defaultFOVFixed = defaultFOV + 2
+    local defaultFOVFixed = (defaultFOV or 68.23) + 2
     local f = 68.23 - defaultFOVFixed
 
     local fov = math.floor(defaultFOVFixed + f*math.min(1, pitchProgress * 2) + ((math.min(1, pitchProgress)) * -8))
