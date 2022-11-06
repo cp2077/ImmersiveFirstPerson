@@ -17,13 +17,14 @@ local isEnabled = true
 local isDisabledByApi = false
 local isYInverted = false
 local isXInverted = false
+local freeLookInCombat = true
 
 local API = {}
 
 function API.Enable()
     isDisabledByApi = false
     isEnabled = true
-    if ShouldSetCamera(Config.inner.freeLookInCombat) then
+    if ShouldSetCamera(freeLookInCombat) then
         ImmersiveFirstPerson.HandleCamera(true)
     end
 end
@@ -40,7 +41,7 @@ function API.IsEnabled()
 end
 
 function CombatFreeLook()
-    return Config.inner.freeLookInCombat
+    return freeLookInCombat
 end
 
 -- Helpers
@@ -243,7 +244,7 @@ function ImmersiveFirstPerson.HandleFreeLook(relX, relY)
         return
     end
 
-    if not ShouldSetCamera(Config.inner.freeLookInCombat) then
+    if not ShouldSetCamera(freeLookInCombat) then
         -- BVFP wil set camera automatically
         if Helpers.IsInVehicle() and Helpers.HasBVFP() then
             return
@@ -262,40 +263,85 @@ function ImmersiveFirstPerson.HandleFreeLook(relX, relY)
     local curY = curPos.y
     local curZ = curPos.z
 
-    local curRoll = curEuler.roll
-    local curPitch = not lastNativePitchUsed and math.max(-Vars.FREELOOK_MAX_PITCH, lastNativePitch) or curEuler.pitch
-    local curYaw = curEuler.yaw
+    local weapon = Helpers.HasWeapon()
 
+    local curYaw = curEuler.yaw
+    local curRoll = curEuler.roll
+    
     local zoom = fpp:GetZoom()
     local xSensitivity = 0.07 / zoom * Config.inner.freeLookSensitivity/20
     local ySensitivity = 0.07 / zoom * Config.inner.freeLookSensitivity/20
+    
+    local sensXMult = 1
+    local sensYMult = 1
+    
+    local yawingOut = curYaw > 0 and relX > 0 or curYaw < 0 and relX < 0
+    
+    local function easeOutCubic(x)
+        return 1 - (1-x)^3
+    end
+    
+    local function easeOutExp(x)
+        -- return x == 1 and 1 or 1 - 2^(-10*x)
+        return x == 0 and 0 or 2 ^ (5 * x - 5)
+    end
+    
+    
+    -- print(math.abs(curYaw / Vars.FREELOOK_MAX_YAW), easeOutExp(math.abs(curYaw / Vars.FREELOOK_MAX_YAW)))
+    local yawProgress = (yawingOut and easeOutExp(math.abs(curYaw / Vars.FREELOOK_MAX_YAW)) or 0) + (1 - easeOutExp(math.abs(curYaw / Vars.FREELOOK_MAX_YAW)))
+    
+    local yaw = math.min(Vars.FREELOOK_MAX_YAW, math.max( -Vars.FREELOOK_MAX_YAW, (curYaw - (relX*xSensitivity * yawProgress))))
+    
+    local r = (math.abs(curYaw) + 100) / Vars.FREELOOK_MAX_YAW
 
-    local yaw = math.min(Vars.FREELOOK_MAX_YAW, math.max( -Vars.FREELOOK_MAX_YAW, (curYaw - (relX*xSensitivity))))
+    local maxPitch = weapon and Vars.FREELOOK_MAX_PITCH_COMBAT_UP or Vars.FREELOOK_MAX_PITCH
+
+    local maxPitchOnYaw = (weapon and curEuler.pitch < 0) and math.min(Vars.FREELOOK_MAX_PITCH_COMBAT, Vars.FREELOOK_MAX_PITCH_COMBAT * r) or maxPitch
+
+    local curPitch = (not weapon and not lastNativePitchUsed) and math.max(-maxPitchOnYaw, lastNativePitch) or curEuler.pitch
+    -- local yaw = -Vars.FREELOOK_MAX_YAW * yawProgress
+
+    local pitchingOut = curPitch > 0 and relY < 0 or curPitch < 0 and relY > 0
 
     -- yawCorrection need to higher up pitch when approaching high yaw (when looking over shoulder)
-    local pitch = math.min(Vars.FREELOOK_MAX_PITCH, math.max(-Vars.FREELOOK_MAX_PITCH, (curPitch) + (relY*ySensitivity)))
+    local pitchSmoothing = ((pitchingOut and easeOutExp(-math.min(0, curPitch / maxPitchOnYaw)) or 0) + (1 - easeOutExp(-math.min(0, curPitch / maxPitchOnYaw))))
+
+    -- local maxPitchOnYawOnYaw = weapon and (Vars.FREELOOK_MAX_PITCH_COMBAT_UP * (0.3 + math.abs((curYaw) / Vars.FREELOOK_MAX_YAW))) or maxPitchOnYaw
+    local pitch = math.min(maxPitchOnYaw, math.max(-maxPitchOnYaw, (curPitch) + (relY*ySensitivity * pitchSmoothing)))
     lastNativePitchUsed = true
 
     -- -1(left) +1(right)
     local delta = (yaw < 0) and 1 or -1
     local xShiftMultiplier = math.abs(yaw) / Vars.FREELOOK_MAX_YAW * 2
 
-    local x = Vars.FREELOOK_MAX_X_SHIFT * xShiftMultiplier * delta
-    local roll = Vars.FREELOOK_MAX_ROLL * (xShiftMultiplier/10) * -delta
-
+    local freelookMaxXShift = weapon and Vars.FREELOOK_MAX_X_SHIFT_COMBAT or Vars.FREELOOK_MAX_X_SHIFT
+    local x = freelookMaxXShift * xShiftMultiplier * delta
+    
     -- as we look down we need to move camera sligthly forwards
-    local pitchProgress = -math.min(0, curPitch / Vars.FREELOOK_MAX_PITCH)
+    local pitchProgress = -math.min(0, curPitch / maxPitchOnYaw)
+
+    -- local pitchProgress = -math.min(0, curPitch / maxPitch) * (1 - easeOutExp(-math.min(0, curPitch / maxPitch)))
+
+    local rollSmoothMult = easeOutCubic(pitchProgress)
+    local maxRoll = weapon and Vars.FREELOOK_MAX_COMBAT_ROLL or Vars.FREELOOK_MAX_ROLL
+    local roll = maxRoll * (pitchProgress) * (xShiftMultiplier/10) * -delta * rollSmoothMult
 
     local f = Helpers.GetFOV()
     -- TODO: fuck you
     local poopshit = (68 / f - 1) * 0.01
     local xShiftMultiplierReduction = 1 - (xShiftMultiplier/ 2)
     -- the closer we are to looking behind our shoulders the less prominent should be X and Y axises
-    local y = -curve(pitchProgress, 0, Vars.FREELOOK_MAX_Y*3, -Vars.FREELOOK_MAX_Y/20-0.05) -0.005*xShiftMultiplier
 
-    local z = curve(pitchProgress, 0, (-Vars.FREELOOK_MIN_Z), Vars.FREELOOK_MIN_Z/2  + 0.02 + poopshit*30) * xShiftMultiplierReduction
+    local endForwardMult = weapon and 40 or 20
+    local startForwardMult = weapon and 0 or 3
+    local y = -curve(pitchProgress, 0, Vars.FREELOOK_MAX_Y*startForwardMult, -Vars.FREELOOK_MAX_Y/endForwardMult-0.05) -0.005*xShiftMultiplier
 
-    local defaultFOVFixed = (defaultFOV or 68.23) + 2
+    local startUpMult = weapon and 0.2 or 1
+    local endUpMult = weapon and 0.001 or 1
+
+    local z = curve(pitchProgress, 0, (-Vars.FREELOOK_MIN_Z * startUpMult), Vars.FREELOOK_MIN_Z/2 * endUpMult  + 0.02 + poopshit*30 * endUpMult) * xShiftMultiplierReduction
+
+    local defaultFOVFixed = defaultFOV + 2
     local f = 68.23 - defaultFOVFixed
 
     local fov = math.floor(defaultFOVFixed + f*math.min(1, pitchProgress * 2) + ((math.min(1, pitchProgress)) * -8))
@@ -491,7 +537,8 @@ function ImmersiveFirstPerson.Init()
         if not inited then
             return
         end
-        if Helpers.IsFreeObservation() and not ShouldSetCamera(Config.inner.freeLookInCombat) and not Helpers.IsRestoringCamera() then
+
+        if Helpers.IsFreeObservation() and not ShouldSetCamera(freeLookInCombat) and not Helpers.IsRestoringCamera() then
             if Helpers.IsInVehicle() and Helpers.HasBVFP() then
                 return
             end
@@ -530,7 +577,7 @@ function ImmersiveFirstPerson.Init()
         -- IS ENABLED
         isEnabled, IsEnabledToggled = ImGui.Checkbox("Enabled", isEnabled)
         if IsEnabledToggled then
-            if isEnabled and ShouldSetCamera(Config.inner.freeLookInCombat) then
+            if isEnabled and ShouldSetCamera(freeLookInCombat) then
                 ImmersiveFirstPerson.HandleCamera(true)
             elseif not Helpers.IsInVehicle() or (Helpers.IsInVehicle() and not Helpers.HasBVFP()) then
                 ResetCamera()
@@ -567,7 +614,7 @@ function ImmersiveFirstPerson.Init()
         TooltipIfHovered(msg)
         if changed then
             Config.SaveConfig()
-            if isEnabled and ShouldSetCamera(Config.inner.freeLookInCombat) then
+            if isEnabled and ShouldSetCamera(freeLookInCombat) then
                 ImmersiveFirstPerson.HandleCamera(true)
             elseif not Helpers.IsInVehicle() or (Helpers.IsInVehicle() and not Helpers.HasBVFP()) then
                 ResetCamera()
@@ -589,7 +636,7 @@ function ImmersiveFirstPerson.Init()
         end
 
         -- freelook in combat
-        -- Config.inner.freeLookInCombat, changed = ImGui.Checkbox("Enable FreeLook in combat", Config.inner.freeLookInCombat)
+        -- freeLookInCombat, changed = ImGui.Checkbox("Enable FreeLook in combat", freeLookInCombat)
         -- if changed then
         --     Config.SaveConfig()
         -- end
@@ -612,7 +659,7 @@ function ImmersiveFirstPerson.Init()
           return
         end
 
-        if not ShouldSetCamera(Config.inner.freeLookInCombat) then
+        if not ShouldSetCamera(freeLookInCombat) then
             return
         end
         local fpp = Helpers.GetFPP()
@@ -631,7 +678,7 @@ function ImmersiveFirstPerson.Init()
             end
 
             lastNativePitch = Helpers.GetPitch()
-            if not Config.inner.freeLookInCombat then
+            if not Helpers.HasWeapon() then
                 fpp:ResetPitch()
             end
             Helpers.SetFreeObservation(true)
