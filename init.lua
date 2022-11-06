@@ -79,6 +79,7 @@ function ShouldSetCamera(ignoreWeapon)
         and (not Helpers.HasWeapon() or ignoreWeapon)
         and not Helpers.IsInVehicle()
         and not Helpers.IsSwimming()
+        and Helpers.IsTakingDown() <= 0
         and not blockingThirdPartyMods()
         and not Helpers.IsCarryingBody()
 end

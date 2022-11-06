@@ -233,6 +233,18 @@ function Helpers.GetSceneTier()
     return 0
 end
 
+function Helpers.IsTakingDown()
+    local player, blackboardDefs, blackboardSystem = GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
+    if player then
+        local blackboardPSM = blackboardSystem:GetLocalInstanced(player:GetEntityID(), blackboardDefs.PlayerStateMachine)
+        return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Takedown)
+    end
+
+    return 0
+end
+
+
+
 function Helpers.IsCarryingBody()
     local player, blackboardDefs, blackboardSystem = GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
     if player then
