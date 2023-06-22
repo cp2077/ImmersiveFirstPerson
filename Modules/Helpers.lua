@@ -233,6 +233,8 @@ function Helpers.GetSceneTier()
     return 0
 end
 
+
+
 function Helpers.IsTakingDown()
     local player, blackboardDefs, blackboardSystem = GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
     if player then
@@ -243,6 +245,26 @@ function Helpers.IsTakingDown()
     return 0
 end
 
+function Helpers.IsKnockedDown()
+    local player, blackboardDefs, blackboardSystem = GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
+    if player then
+        local blackboardPSM = blackboardSystem:GetLocalInstanced(player:GetEntityID(), blackboardDefs.PlayerStateMachine)
+
+        if blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Landing) > 1 then
+            return true
+        end
+
+        if StatusEffectSystem.ObjectHasStatusEffectOfType(Game.GetPlayer(), 'VehicleKnockdown') then
+            return true
+        end
+
+        if StatusEffectSystem.ObjectHasStatusEffectOfType(Game.GetPlayer(), 'BikeKnockdown') then
+            return true
+        end
+    end
+
+    return false
+end
 
 
 function Helpers.IsCarryingBody()

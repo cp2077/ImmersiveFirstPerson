@@ -1,4 +1,4 @@
-local ImmersiveFirstPerson = { version = "1.3.0" }
+local ImmersiveFirstPerson = { version = "1.3.1" }
 local Cron = require("Modules/Cron")
 local GameSession = require("Modules/GameSession")
 local GameSettings = require("Modules/GameSettings")
@@ -83,6 +83,7 @@ function ShouldSetCamera(ignoreWeapon)
         and Helpers.IsTakingDown() <= 0
         and not blockingThirdPartyMods()
         and not Helpers.IsCarryingBody()
+        and not Helpers.IsKnockedDown()
 end
 
 function IsCrouching()
