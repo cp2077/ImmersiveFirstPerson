@@ -15,6 +15,29 @@ local Config = {
     isReady = false,
 }
 
+local writeFailureLogged = false
+
+local function resolveConfigPath()
+    local sourceInfo = debug.getinfo(1, "S")
+    local source = sourceInfo and sourceInfo.source or nil
+    if type(source) ~= "string" or source:sub(1, 1) ~= "@" then
+        return Vars.CONFIG_FILE_NAME
+    end
+
+    local moduleDirectory = source:sub(2):match("^(.*[\\/])")
+    if not moduleDirectory then
+        return Vars.CONFIG_FILE_NAME
+    end
+
+    -- CET normally makes relative paths local to the mod, but that behavior has
+    -- differed between releases and launch contexts. Resolve from this module's
+    -- own source path so config persistence never depends on process cwd.
+    local modDirectory = moduleDirectory:gsub("Modules[\\/]$", "")
+    return modDirectory .. Vars.CONFIG_FILE_NAME
+end
+
+local CONFIG_PATH = resolveConfigPath()
+
 local function copyDefaults()
     local result = {}
     for key, value in pairs(defaults) do
@@ -39,7 +62,7 @@ local function readFile(path)
 end
 
 local function readConfig()
-    local encoded = readFile(Vars.CONFIG_FILE_NAME)
+    local encoded = readFile(CONFIG_PATH)
     if not encoded or encoded == "" then
         return nil
     end
@@ -48,7 +71,7 @@ local function readConfig()
         return json.decode(encoded)
     end)
     if not ok or type(decoded) ~= "table" then
-        Helpers.PrintMsg(('Cannot read config file %q; defaults will be used.'):format(Vars.CONFIG_FILE_NAME))
+        Helpers.PrintMsg(('Cannot read config file %q; defaults will be used.'):format(CONFIG_PATH))
         return nil
     end
 
@@ -91,14 +114,44 @@ local function validate(config)
 end
 
 local function writeConfig()
-    local file = io.open(Vars.CONFIG_FILE_NAME, "w")
-    if not file then
-        Helpers.RaiseError(('Cannot write config file %q.'):format(Vars.CONFIG_FILE_NAME))
-        return
+    local encodedOk, encoded = pcall(json.encode, Config.inner)
+    if not encodedOk then
+        if not writeFailureLogged then
+            Helpers.PrintMsg("Cannot encode config; using in-memory settings: " .. tostring(encoded))
+            writeFailureLogged = true
+        end
+        return false
     end
 
-    file:write(json.encode(Config.inner))
-    file:close()
+    local file, openError = io.open(CONFIG_PATH, "w")
+    if not file then
+        -- Settings persistence is optional. Older builds could fail initialization
+        -- here, making a missing config look as though the entire camera mod broke.
+        if not writeFailureLogged then
+            Helpers.PrintMsg(('Cannot write config file %q (%s); using in-memory settings.'):format(
+                CONFIG_PATH,
+                tostring(openError)
+            ))
+            writeFailureLogged = true
+        end
+        return false
+    end
+
+    local wrote, writeError = file:write(encoded)
+    local closed, closeError = file:close()
+    if not wrote or not closed then
+        if not writeFailureLogged then
+            Helpers.PrintMsg(('Cannot persist config file %q (%s); using in-memory settings.'):format(
+                CONFIG_PATH,
+                tostring(writeError or closeError)
+            ))
+            writeFailureLogged = true
+        end
+        return false
+    end
+
+    writeFailureLogged = false
+    return true
 end
 
 function Config.InitConfig()

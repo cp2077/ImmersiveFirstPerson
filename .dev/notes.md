@@ -17,3 +17,4 @@
 - `SetCameraParamsWithOverridesEvent` changed pitch limits but did not move current native pitch on 2.31. Using `Tier3Scene` for vertical handoff also altered camera context, so this approach was rejected.
 - Head-cone resistance is directional: only movement farther toward the boundary is softened; tangential and inward movement retain full input speed.
 - Native look-down translation varies strongly with FOV. The FOV 70 and FOV 100 captures define a continuous positional compensation across the standard slider range; interpolation uses the component's converted vertical FOV (`43.41–68.23`), not the horizontal slider values. Upward movement is effectively unchanged.
+- Config paths resolve from `Modules/Config.lua`, not process cwd. Missing or malformed files are regenerated, while an unwritable directory leaves validated in-memory defaults active instead of aborting mod initialization.
