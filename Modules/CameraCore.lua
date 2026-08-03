@@ -430,22 +430,6 @@ local function getFreeLookLimits(hasWeapon)
     return free.MAX_YAW, free.MAX_PITCH_DOWN, free.MAX_PITCH_UP
 end
 
-local function softAxisLimit(value, limit)
-    if limit <= 0.0001 then
-        return 0.0
-    end
-
-    local start = limit * Vars.FREELOOK.EDGE_SOFT_START
-    local magnitude = math.abs(value)
-    if magnitude <= start then
-        return value
-    end
-
-    local remaining = limit - start
-    local softened = start + remaining * (1.0 - math.exp(-(magnitude - start) / remaining))
-    return value < 0.0 and -softened or softened
-end
-
 local function getAvailablePitchLimits(hasWeapon, basePitch)
     local _, relativeDown, relativeUp = getFreeLookLimits(hasWeapon)
     local floor = runtime.pitchFloor or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
@@ -463,18 +447,69 @@ local function getAvailablePitchLimits(hasWeapon, basePitch)
     return math.min(relativeDown, availableDown), math.min(relativeUp, availableUp)
 end
 
-local function mapHeadCone(rawYaw, rawPitch, hasWeapon, basePitch)
+local function signedPitchLimit(pitch, maxPitchDown, maxPitchUp)
+    return pitch < 0.0 and maxPitchDown or maxPitchUp
+end
+
+local function normalizePitch(pitch, maxPitchDown, maxPitchUp)
+    local limit = signedPitchLimit(pitch, maxPitchDown, maxPitchUp)
+    return limit > 0.0001 and pitch / limit or 0.0
+end
+
+local function coneRadius(yaw, pitch)
+    local power = Vars.FREELOOK.CONE_POWER
+    return (math.abs(yaw) ^ power + math.abs(pitch) ^ power) ^ (1.0 / power)
+end
+
+local function stepHeadCone(yaw, pitch, yawDelta, pitchDelta, hasWeapon, basePitch)
     local maxYaw, maxPitchDown, maxPitchUp = getFreeLookLimits(hasWeapon)
     maxPitchDown, maxPitchUp = getAvailablePitchLimits(hasWeapon, basePitch)
-    local pitchLimit = rawPitch < 0.0 and maxPitchDown or maxPitchUp
-    local yaw = softAxisLimit(rawYaw, maxYaw)
-    local pitch = softAxisLimit(rawPitch, pitchLimit)
+
+    if maxYaw <= 0.0001 then
+        return 0.0, 0.0
+    end
+
     local normalizedYaw = yaw / maxYaw
-    local normalizedPitch = pitchLimit > 0.0001 and pitch / pitchLimit or 0.0
+    local normalizedPitch = normalizePitch(pitch, maxPitchDown, maxPitchUp)
+    local yawStep = yawDelta / maxYaw
+    local pitchStep = normalizePitch(
+        pitch + pitchDelta,
+        maxPitchDown,
+        maxPitchUp
+    ) - normalizedPitch
+    local radius = coneRadius(normalizedYaw, normalizedPitch)
     local power = Vars.FREELOOK.CONE_POWER
-    local radius = (
-        math.abs(normalizedYaw) ^ power + math.abs(normalizedPitch) ^ power
-    ) ^ (1.0 / power)
+
+    -- Only the outward component meets resistance. Tangential motion and any
+    -- movement back toward the centre retain full input speed, so the soft edge
+    -- never feels sticky after the player reverses direction.
+    if radius > Vars.FREELOOK.EDGE_SOFT_START then
+        local yawGradient = normalizedYaw == 0.0
+            and 0.0
+            or (normalizedYaw < 0.0 and -1.0 or 1.0)
+                * math.abs(normalizedYaw) ^ (power - 1.0)
+        local pitchGradient = normalizedPitch == 0.0
+            and 0.0
+            or (normalizedPitch < 0.0 and -1.0 or 1.0)
+                * math.abs(normalizedPitch) ^ (power - 1.0)
+        local outwardStep = yawStep * yawGradient + pitchStep * pitchGradient
+        local gradientLengthSquared = yawGradient * yawGradient
+            + pitchGradient * pitchGradient
+
+        if outwardStep > 0.0 and gradientLengthSquared > 0.000001 then
+            local edgeProgress = smoothstep(
+                (radius - Vars.FREELOOK.EDGE_SOFT_START)
+                    / (1.0 - Vars.FREELOOK.EDGE_SOFT_START)
+            )
+            local removedScale = outwardStep / gradientLengthSquared * edgeProgress
+            yawStep = yawStep - yawGradient * removedScale
+            pitchStep = pitchStep - pitchGradient * removedScale
+        end
+    end
+
+    normalizedYaw = normalizedYaw + yawStep
+    normalizedPitch = normalizedPitch + pitchStep
+    radius = coneRadius(normalizedYaw, normalizedPitch)
 
     -- A superellipse behaves like a rounded head-look box: full shoulder turns
     -- and substantial vertical motion can coexist, while diagonal extremes are
@@ -484,6 +519,7 @@ local function mapHeadCone(rawYaw, rawPitch, hasWeapon, basePitch)
         normalizedPitch = normalizedPitch / radius
     end
 
+    local pitchLimit = signedPitchLimit(normalizedPitch, maxPitchDown, maxPitchUp)
     return normalizedYaw * maxYaw, normalizedPitch * pitchLimit
 end
 
@@ -554,28 +590,25 @@ local function applyFreeLookInput(delta, fpp, hasWeapon, basePitch)
     local invertX = runtime.invertX and -1.0 or 1.0
     local invertY = runtime.invertY and -1.0 or 1.0
     local mouseScale = free.MOUSE_DEGREES_PER_UNIT * sensitivity / zoom
-    runtime.rawYaw = runtime.rawYaw - runtime.input.mouseX * invertX * mouseScale
-    runtime.rawPitch = runtime.rawPitch + runtime.input.mouseY * invertY * mouseScale
+    local yawDelta = -runtime.input.mouseX * invertX * mouseScale
+    local pitchDelta = runtime.input.mouseY * invertY * mouseScale
 
     local controllerScale = free.CONTROLLER_DEGREES_PER_SECOND * sensitivity * delta
-    runtime.rawYaw = runtime.rawYaw - inputAxis(runtime.input.stickX) * invertX * controllerScale
-    runtime.rawPitch = runtime.rawPitch + inputAxis(runtime.input.stickY) * invertY * controllerScale
+    yawDelta = yawDelta
+        - inputAxis(runtime.input.stickX) * invertX * controllerScale
+    pitchDelta = pitchDelta
+        + inputAxis(runtime.input.stickY) * invertY * controllerScale
 
-    local maxYaw, maxPitchDown, maxPitchUp = getFreeLookLimits(hasWeapon)
-    maxPitchDown, maxPitchUp = getAvailablePitchLimits(hasWeapon, basePitch)
-    local overshoot = free.RAW_OVERSHOOT
-    runtime.rawYaw = clamp(runtime.rawYaw, -maxYaw * overshoot, maxYaw * overshoot)
-    runtime.rawPitch = clamp(
-        runtime.rawPitch,
-        -maxPitchDown * overshoot,
-        maxPitchUp * overshoot
-    )
-    runtime.freeYaw, runtime.freePitch = mapHeadCone(
-        runtime.rawYaw,
-        runtime.rawPitch,
+    runtime.freeYaw, runtime.freePitch = stepHeadCone(
+        runtime.freeYaw,
+        runtime.freePitch,
+        yawDelta,
+        pitchDelta,
         hasWeapon,
         basePitch
     )
+    runtime.rawYaw = runtime.freeYaw
+    runtime.rawPitch = runtime.freePitch
     runtime.input.mouseX = 0
     runtime.input.mouseY = 0
 end

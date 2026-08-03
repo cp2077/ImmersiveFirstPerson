@@ -27,7 +27,6 @@ return {
         CONTROLLER_DEADZONE = 0.12,
         EDGE_SOFT_START = 0.70,
         CONE_POWER = 4.0,
-        RAW_OVERSHOOT = 2.0,
         SHOULDER_START = 0.35,
 
         MAX_YAW = 145.0,

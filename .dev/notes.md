@@ -15,3 +15,4 @@
 - While freelook freezes the native parent, pitch-driven body offsets must be rotated from the virtual/effective camera frame back into that frozen parent frame. Unarmed vertical limits span the remaining absolute component range; combat keeps its tighter relative head limits.
 - Return timing uses uncapped elapsed time while controller integration alone caps large frame deltas. Native input unlocks on key-up.
 - `SetCameraParamsWithOverridesEvent` changed pitch limits but did not move current native pitch on 2.31. Using `Tier3Scene` for vertical handoff also altered camera context, so this approach was rejected.
+- Head-cone resistance is directional: only movement farther toward the boundary is softened; tangential and inward movement retain full input speed.
