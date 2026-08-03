@@ -960,6 +960,11 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     -- the earlier movement from making the camera feel detached from the body.
     local lateralProgress = 0.12 * absoluteYawProgress + 0.88 * lateralShoulderProgress
     local lateral = lateralMax * lateralProgress * sideSign
+    -- Positional/pitch corrections should already be fully engaged around a
+    -- 90-degree side glance; lateral travel itself may continue toward the back.
+    local sideCorrectionProgress = smoothstep(
+        absoluteYawProgress / free.SIDE_CORRECTION_FULL_YAW_PROGRESS
+    )
 
     -- Do not add a hard yaw deadzone: a shallow power curve delays the visible
     -- rotation but remains responsive and still reaches the full cone boundary.
@@ -973,10 +978,10 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
         -composedPitch * free.SIDE_PITCH_NORMALIZATION,
         -free.MAX_SIDE_PITCH_NORMALIZATION,
         free.MAX_SIDE_PITCH_NORMALIZATION
-    ) * lateralProgress
+    ) * sideCorrectionProgress
     local upwardBias = hasWeapon and 0.0
         or free.SIDE_UPWARD_BIAS
-            * lateralProgress
+            * sideCorrectionProgress
             * (1.0 - clamp(
                 composedPitch / free.SIDE_UPWARD_BIAS_FADE_PITCH,
                 0.0,
@@ -993,11 +998,11 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     return {
         yaw = visibleYaw,
         pitch = pitchNormalization + upwardBias,
-        sideProgress = lateralProgress,
+        sideProgress = sideCorrectionProgress,
         lateral = lateral,
         -- Native look-down travels forward. Ease a small amount of that movement
         -- back out during a side turn to keep the neck seam behind the camera.
-        forward = -free.MAX_BACK_OFFSET * lateralProgress,
+        forward = -free.MAX_BACK_OFFSET * sideCorrectionProgress,
         vertical = 0.0,
         roll = roll,
         fovDelta = 0.0,
@@ -1268,19 +1273,31 @@ local function composeAndWrite(fpp, context)
     bodySpaceMotion.vertical = bodySpaceMotion.vertical
         + (visualPosition.vertical - nativePosition.vertical) * positionRestore
 
-    if not context.hasWeapon and effectiveNativePitch > compositionNativePitch then
-        -- The native curve was measured with the camera facing forward. Converting
-        -- its upward translation through a steep frozen entry pitch can create a
-        -- small local drop near the end of an over-the-shoulder sweep. Fade only
-        -- that upward emulation at large yaw; downward anti-clipping stays intact.
-        local upwardProgress = smoothstep(
-            (effectiveNativePitch - compositionNativePitch)
-                / Vars.FREELOOK.SIDE_UPWARD_MOTION_RANGE
-        )
+    if not context.hasWeapon then
+        -- Look-down and the experimental height adjustment can move the native
+        -- camera far forward. That is useful while facing the torso, but keeping
+        -- the complete forward correction at a 90-degree head turn places the
+        -- camera in a detached corner. Retain a smaller neck-safe portion there.
         local motionScale = 1.0
-            - Vars.FREELOOK.SIDE_UPWARD_MOTION_REDUCTION
+            - Vars.FREELOOK.SIDE_NATIVE_MOTION_REDUCTION
                 * freeOffset.sideProgress
-                * upwardProgress
+
+        if effectiveNativePitch > compositionNativePitch then
+            -- The native curve was measured with the camera facing forward.
+            -- Converting its upward translation through a steep frozen entry pitch
+            -- can create a small local drop near the end of a shoulder sweep. Fade
+            -- that remaining upward emulation at large yaw.
+            local upwardProgress = smoothstep(
+                (effectiveNativePitch - compositionNativePitch)
+                    / Vars.FREELOOK.SIDE_UPWARD_MOTION_RANGE
+            )
+            motionScale = motionScale
+                * (1.0
+                    - Vars.FREELOOK.SIDE_UPWARD_MOTION_REDUCTION
+                        * freeOffset.sideProgress
+                        * upwardProgress)
+        end
+
         bodySpaceMotion.forward = bodySpaceMotion.forward * motionScale
         bodySpaceMotion.vertical = bodySpaceMotion.vertical * motionScale
     end
