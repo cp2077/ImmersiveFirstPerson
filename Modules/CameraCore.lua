@@ -92,12 +92,6 @@ local runtime = {
     lock = {
         active = false,
         consumerActions = true,
-        componentPinned = false,
-        pinnedPitch = nil,
-        originalPitchMin = nil,
-        originalPitchMax = nil,
-        originalHeadingLocked = nil,
-        failureLogged = false,
     },
     interferenceFrames = 0,
     interferenceLogged = false,
@@ -340,82 +334,24 @@ local function readNumberProperty(object, property, fallback)
     return fallback
 end
 
-local function applyComponentInputPin(fpp)
-    local lock = runtime.lock
-    if not lock.active or not lock.componentPinned or not fpp then
-        return
-    end
-
-    -- Unlike sensitivityMultX/Y, these properties stop REDengine's native camera
-    -- without zeroing the action values CET needs to drive our virtual head.
-    local halfRange = 0.01
-    local ok = pcall(function()
-        fpp.pitchMin = lock.pinnedPitch - halfRange
-        fpp.pitchMax = lock.pinnedPitch + halfRange
-        fpp.headingLocked = true
-    end)
-    if not ok and not lock.failureLogged then
-        lock.failureLogged = true
-        Helpers.Log("component camera pin failed; falling back to action consumption")
-    end
-end
-
-local function lockNativeInput(fpp, nativePitch)
+local function lockNativeInput()
     if runtime.lock.active then
         return
     end
 
-    local lock = runtime.lock
-    lock.active = true
-    lock.componentPinned = false
-    lock.pinnedPitch = nativePitch
-    lock.originalPitchMin = readNumberProperty(fpp, "pitchMin", nil)
-    lock.originalPitchMax = readNumberProperty(fpp, "pitchMax", nil)
-    lock.originalHeadingLocked = nil
-    lock.failureLogged = false
-
-    local headingOk, headingLocked = pcall(function()
-        return fpp.headingLocked
-    end)
-    if headingOk and type(headingLocked) == "boolean"
-        and finite(nativePitch)
-        and finite(lock.originalPitchMin)
-        and finite(lock.originalPitchMax) then
-        lock.originalHeadingLocked = headingLocked
-        lock.componentPinned = true
-        applyComponentInputPin(fpp)
-    end
-
-    Helpers.Log(lock.componentPinned
-        and "native camera lock: pinning component and consuming camera actions"
-        or "native camera lock: consuming camera actions")
+    runtime.lock.active = true
+    Helpers.Log("native camera lock: consuming camera actions")
 end
 
-local function maintainNativeInputLock(fpp)
-    applyComponentInputPin(fpp)
+local function maintainNativeInputLock()
 end
 
-local function unlockNativeInput(fpp)
-    local lock = runtime.lock
-    if not lock.active then
+local function unlockNativeInput()
+    if not runtime.lock.active then
         return
     end
 
-    if lock.componentPinned and fpp then
-        pcall(function()
-            fpp.pitchMin = lock.originalPitchMin
-            fpp.pitchMax = lock.originalPitchMax
-            fpp.headingLocked = lock.originalHeadingLocked
-        end)
-    end
-
-    lock.active = false
-    lock.componentPinned = false
-    lock.pinnedPitch = nil
-    lock.originalPitchMin = nil
-    lock.originalPitchMax = nil
-    lock.originalHeadingLocked = nil
-    lock.failureLogged = false
+    runtime.lock.active = false
 end
 
 local function maintainInputUnlock()
@@ -1499,7 +1435,7 @@ function CameraCore.BeginFreeLook(context)
     clearInputStats()
     runtime.freeLookParentDriftLogged = false
     runtime.freeLookLocalWriterLogged = false
-    lockNativeInput(fpp, runtime.entryNativePitch)
+    lockNativeInput(fpp)
     setMode(MODE.FREELOOK, "input pressed")
     return true
 end
@@ -1704,10 +1640,6 @@ function CameraCore.Suspend(reason)
     local resetNativePitch = runtime.heightApplied == true
         or runtime.heightTransfer.active
         or runtime.heightPitchFloor.active
-    -- Restore the freelook pin before the height experiment restores its own
-    -- persistent floor; doing this in the opposite order would resurrect the
-    -- saved experimental floor after its bookkeeping had already been cleared.
-    unlockNativeInput(fpp)
     abortHeightTransfer(fpp, reason or "suspended", false)
     restoreHeightPitchFloor(fpp)
     runtime.heightApplied = resetNativePitch and false or nil
@@ -1722,6 +1654,7 @@ function CameraCore.Suspend(reason)
     runtime.pitchCeiling = nil
     runtime.entryNativePitch = 0.0
     runtime.returnElapsed = 0
+    unlockNativeInput(fpp)
     releaseCamera(fpp)
     if resetNativePitch and fpp then
         pcall(function()
