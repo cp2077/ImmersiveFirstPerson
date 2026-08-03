@@ -2,8 +2,11 @@ local NativeCameraCurve = {}
 
 local MIN_PITCH = -80.0
 local MAX_PITCH = 80.0
-local MIN_CALIBRATED_FOV = 70.0
-local REFERENCE_FOV = 100.0
+-- FPPCameraComponent reports vertical FOV, while the settings slider is
+-- horizontal. These correspond to slider values 70 and 100 in the calibrated
+-- 16:9 setup; 68.23 is also the original mod's known-good FOV reference.
+local MIN_CALIBRATED_FOV = 43.4072366
+local REFERENCE_FOV = 68.23
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
