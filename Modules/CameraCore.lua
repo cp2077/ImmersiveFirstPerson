@@ -892,8 +892,7 @@ local function normalizePitch(pitch, maxPitchDown, maxPitchUp)
     return limit > 0.0001 and pitch / limit or 0.0
 end
 
-local function coneRadius(yaw, pitch)
-    local power = Vars.FREELOOK.CONE_POWER
+local function coneRadius(yaw, pitch, power)
     return (math.abs(yaw) ^ power + math.abs(pitch) ^ power) ^ (1.0 / power)
 end
 
@@ -963,8 +962,14 @@ local function stepHeadCone(
         maxPitchDown,
         maxPitchUp
     ) - normalizedPitch
-    local radius = coneRadius(normalizedYaw, normalizedPitch)
-    local power = Vars.FREELOOK.CONE_POWER
+    -- Unarmed freelook keeps a rounded-box cone so substantial pitch and yaw
+    -- can coexist. The armed camera uses a true ellipse: either axis may reach
+    -- its full limit alone, but diagonal input shares one movement budget and
+    -- cannot reach both weapon-rig extremes simultaneously.
+    local power = hasWeapon
+        and Vars.FREELOOK.COMBAT_CONE_POWER
+        or Vars.FREELOOK.CONE_POWER
+    local radius = coneRadius(normalizedYaw, normalizedPitch, power)
 
     -- Only the outward component meets resistance. Tangential motion and any
     -- movement back toward the centre retain full input speed, so the soft edge
@@ -995,11 +1000,9 @@ local function stepHeadCone(
 
     normalizedYaw = normalizedYaw + yawStep
     normalizedPitch = normalizedPitch + pitchStep
-    radius = coneRadius(normalizedYaw, normalizedPitch)
+    radius = coneRadius(normalizedYaw, normalizedPitch, power)
 
-    -- A superellipse behaves like a rounded head-look box: full shoulder turns
-    -- and substantial vertical motion can coexist, while diagonal extremes are
-    -- normalized smoothly back onto one continuous boundary.
+    -- Normalize overshoot back onto the selected continuous boundary.
     if radius > 1.0 then
         normalizedYaw = normalizedYaw / radius
         normalizedPitch = normalizedPitch / radius

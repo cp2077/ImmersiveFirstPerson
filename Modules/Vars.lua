@@ -27,6 +27,7 @@ return {
         CONTROLLER_DEADZONE = 0.12,
         EDGE_SOFT_START = 0.70,
         CONE_POWER = 4.0,
+        COMBAT_CONE_POWER = 2.0,
         LATERAL_START = 0.07,
         LATERAL_STOP_YAW_PROGRESS = 0.69,
         BODY_FADE_START_YAW_PROGRESS = 0.38,
