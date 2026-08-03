@@ -25,7 +25,8 @@ local HEIGHT_TRANSFER_TIMEOUT = HEIGHT_TRANSFER_DURATION + 0.30
 local HEIGHT_TRANSFER_TOLERANCE = 0.15
 local HEIGHT_ENABLE_SETTLE_DURATION = 0.25
 local HEIGHT_TRANSFER_RETRY_DELAY = 0.75
-local BODY_WEAPON_TRANSITION_DURATION = 0.08
+local BODY_WEAPON_FADE_OUT_DURATION = 0.05
+local BODY_WEAPON_FADE_IN_DURATION = 0.12
 
 local runtime = {
     mode = MODE.SUSPENDED,
@@ -489,13 +490,16 @@ local function updateBodyBlend(context, delta)
     end
 
     if transition.active then
+        local duration = transition.target > transition.from
+            and BODY_WEAPON_FADE_IN_DURATION
+            or BODY_WEAPON_FADE_OUT_DURATION
         transition.elapsed = math.min(
             transition.elapsed + math.max(tonumber(delta) or 0.0, 0.0),
-            BODY_WEAPON_TRANSITION_DURATION
+            duration
         )
-        local progress = BODY_WEAPON_TRANSITION_DURATION <= 0.0
+        local progress = duration <= 0.0
             and 1.0
-            or transition.elapsed / BODY_WEAPON_TRANSITION_DURATION
+            or transition.elapsed / duration
         runtime.bodyBlend = transition.from
             + (transition.target - transition.from) * smoothstep(progress)
         if progress >= 1.0 then
