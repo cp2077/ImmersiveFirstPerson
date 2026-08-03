@@ -1406,28 +1406,11 @@ local function composeAndWrite(fpp, context)
         forward = body.forward,
         vertical = body.vertical,
     }
-    local bodySpacePitch = runtime.heightPitch
-    if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
-        -- This is usually identical to freePitch. Expressing it as the virtual
-        -- minus actual parent pitch also cancels any native movement that escaped
-        -- the input consumer without changing the visible pose.
-        bodySpacePitch = bodySpacePitch
-            + effectiveNativePitch - compositionNativePitch
-    end
-    if math.abs(bodySpacePitch) > 0.0001 then
-        -- The body-presence offset is authored in the local frame the native
-        -- camera would have at the visual pitch. Rotate it through both the
-        -- experimental height counter-pitch and any freelook pitch.
-        local rotatedBody = rotatePitchVector(bodySpacePitch, body)
-        bodyPosition.forward = rotatedBody.forward
-        bodyPosition.vertical = rotatedBody.vertical
-    end
     if not context.hasWeapon
         and (runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING) then
-        -- The normal look-down body curve moves forward as it fades toward level
-        -- view. At a completed shoulder turn that becomes a sideways slide across
-        -- the torso. Hold the side pose against a body-relative rearward reference
-        -- instead, then retract slightly farther as the gaze rises.
+        -- Keep this correction in body space. Applying its target after the
+        -- entry-pitch conversion made the same final gaze land in a different
+        -- place depending on whether freelook began looking up, level, or down.
         local sideRiseProgress = smoothstep(
             (visualEffectivePitch - Vars.FREELOOK.SIDE_FORWARD_HOLD_START_PITCH)
                 / (Vars.FREELOOK.SIDE_FORWARD_HOLD_FULL_PITCH
@@ -1447,12 +1430,34 @@ local function composeAndWrite(fpp, context)
                 + (sideTargetForward - bodyPosition.forward) * sideHold
         end
     end
+    local bodySpacePitch = runtime.heightPitch
+    if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
+        -- This is usually identical to freePitch. Expressing it as the virtual
+        -- minus actual parent pitch also cancels any native movement that escaped
+        -- the input consumer without changing the visible pose.
+        bodySpacePitch = bodySpacePitch
+            + effectiveNativePitch - compositionNativePitch
+    end
+    if math.abs(bodySpacePitch) > 0.0001 then
+        -- The body-presence offset is authored in the local frame the native
+        -- camera would have at the visual pitch. Rotate it through both the
+        -- experimental height counter-pitch and any freelook pitch.
+        local rotatedBody = rotatePitchVector(bodySpacePitch, bodyPosition)
+        bodyPosition.forward = rotatedBody.forward
+        bodyPosition.vertical = rotatedBody.vertical
+    end
+    -- Shoulder setback is authored relative to the body too. Convert it through
+    -- the live native parent pitch instead of adding it as an entry-local vector.
+    local freeMotion = nativeMotionToCameraLocal(compositionNativePitch, {
+        forward = freeOffset.forward,
+        vertical = freeOffset.vertical,
+    })
 
     local position = {
         x = runtime.baseline.position.x + bodyPosition.lateral + freeOffset.lateral,
-        y = runtime.baseline.position.y + bodyPosition.forward + freeOffset.forward
+        y = runtime.baseline.position.y + bodyPosition.forward + freeMotion.forward
             + nativeMotion.forward,
-        z = runtime.baseline.position.z + bodyPosition.vertical + freeOffset.vertical
+        z = runtime.baseline.position.z + bodyPosition.vertical + freeMotion.vertical
             + nativeMotion.vertical,
         w = runtime.baseline.position.w,
     }
