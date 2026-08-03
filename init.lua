@@ -293,6 +293,7 @@ function ImmersiveFirstPerson.Init()
         end
 
         ImGui.Text("Camera state: " .. CameraCore.GetMode())
+        --[[ Native camera sampling UI is retained for future curve captures.
         ImGui.Text("Native camera sampler: " .. NativeCameraSampler.GetStatus())
         if NativeCameraSampler.IsActive() then
             if ImGui.Button("Cancel native camera recording") then
@@ -305,6 +306,7 @@ function ImmersiveFirstPerson.Init()
                 API.StartNativeCameraCapture()
             end
         end
+        ]]
         ImGui.End()
         ImGui.PopStyleVar(1)
     end)
