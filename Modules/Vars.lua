@@ -49,10 +49,8 @@ return {
         COMBAT_MAX_PITCH_UP = 80.0,
 
         MAX_LATERAL_OFFSET = 0.230,
-        COMBAT_MAX_LATERAL_OFFSET = 0.080,
         MAX_BACK_OFFSET = 0.025,
         MAX_ROLL = 8.0,
-        COMBAT_MAX_ROLL = 0.0,
 
         DEFAULT_RETURN_DURATION = 0.45,
         MIN_RETURN_DURATION = 0.08,

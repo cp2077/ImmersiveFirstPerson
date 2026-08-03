@@ -1029,6 +1029,25 @@ function CameraCore.EvaluateFreeLook(yaw, _, hasWeapon)
     local maxYaw = getFreeLookLimits(hasWeapon)
     local absoluteYawProgress = clamp(math.abs(yaw) / maxYaw, 0.0, 1.0)
     local sideSign = yaw < 0 and 1.0 or -1.0
+
+    if hasWeapon then
+        -- The weapon and arms remain attached to REDengine's frozen native
+        -- camera. Positional head choreography moves only our view and exposes
+        -- the inside of that rig, especially when freelook starts downward.
+        -- Keep combat freelook deliberately simple: rotate in place.
+        return {
+            yaw = yaw,
+            pitch = 0.0,
+            sideProgress = 0.0,
+            backProgress = 0.0,
+            lateral = 0.0,
+            forward = 0.0,
+            vertical = 0.0,
+            roll = 0.0,
+            fovDelta = 0.0,
+        }
+    end
+
     local lateralYawProgress = math.min(
         absoluteYawProgress,
         free.LATERAL_STOP_YAW_PROGRESS
@@ -1037,7 +1056,6 @@ function CameraCore.EvaluateFreeLook(yaw, _, hasWeapon)
         (lateralYawProgress - free.LATERAL_START)
             / (free.LATERAL_STOP_YAW_PROGRESS - free.LATERAL_START)
     )
-    local lateralMax = hasWeapon and free.COMBAT_MAX_LATERAL_OFFSET or free.MAX_LATERAL_OFFSET
     local sideCorrectionProgress = smoothstep(
         (absoluteYawProgress - free.BODY_FADE_START_YAW_PROGRESS)
             / (free.BODY_FADE_FULL_YAW_PROGRESS
@@ -1047,9 +1065,8 @@ function CameraCore.EvaluateFreeLook(yaw, _, hasWeapon)
         (absoluteYawProgress - free.BACK_START_YAW_PROGRESS)
             / (free.BACK_FULL_YAW_PROGRESS - free.BACK_START_YAW_PROGRESS)
     )
-    local maxRoll = hasWeapon and free.COMBAT_MAX_ROLL or free.MAX_ROLL
     local roll = -sideSign
-        * maxRoll
+        * free.MAX_ROLL
         * smoothstep(
             (absoluteYawProgress - free.ROLL_START_YAW_PROGRESS)
                 / (1.0 - free.ROLL_START_YAW_PROGRESS)
@@ -1060,8 +1077,8 @@ function CameraCore.EvaluateFreeLook(yaw, _, hasWeapon)
         pitch = 0.0,
         sideProgress = sideCorrectionProgress,
         backProgress = backProgress,
-        lateral = lateralMax * lateralProgress * sideSign,
-        forward = hasWeapon and 0.0 or -free.MAX_BACK_OFFSET * backProgress,
+        lateral = free.MAX_LATERAL_OFFSET * lateralProgress * sideSign,
+        forward = -free.MAX_BACK_OFFSET * backProgress,
         vertical = 0.0,
         roll = roll,
         fovDelta = 0.0,
@@ -1355,6 +1372,15 @@ local function composeAndWrite(fpp, context)
     local positionRestore = evaluateHeightPositionRestore(visualEffectivePitch)
     bodySpaceMotion.vertical = bodySpaceMotion.vertical
         + (visualPosition.vertical - nativePosition.vertical) * positionRestore
+
+    if context.hasWeapon
+        and (runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING) then
+        -- Emulating the native pitch translation is useful for an unarmed head,
+        -- but the armed body and weapon do not follow our local camera. Pin the
+        -- view to its entry position and apply orientation only.
+        bodySpaceMotion.forward = 0.0
+        bodySpaceMotion.vertical = 0.0
+    end
 
     if not context.hasWeapon and freeOffset.sideProgress > 0.0 then
         -- At the shoulder, target a neutral body-forward camera position instead
