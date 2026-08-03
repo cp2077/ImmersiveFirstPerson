@@ -27,6 +27,7 @@ local HEIGHT_ENABLE_SETTLE_DURATION = 0.25
 local HEIGHT_TRANSFER_RETRY_DELAY = 0.75
 local BODY_WEAPON_FADE_OUT_DURATION = 0.08
 local BODY_WEAPON_FADE_IN_DURATION = 0.25
+local FIXED_FOV_POSITION_COMPENSATION = 0.75
 
 local runtime = {
     mode = MODE.SUSPENDED,
@@ -1502,10 +1503,17 @@ local function composeAndWrite(fpp, context)
     -- OffsetToReference also contains virtual pitch motion used by height and
     -- freelook. Fade only its ordinary FOV/body component during weapon changes;
     -- the independent height handoff must continue holding the visible gaze.
+    -- Full physical FOV compensation was calibrated alongside the mod's FOV
+    -- correction. At a deliberately fixed narrow FOV it looks too far forward,
+    -- so retain a reduced amount without weakening any other camera channel.
+    local bodyCurveInfluence = bodyBlend
+    if Config.inner.dontChangeFov then
+        bodyCurveInfluence = bodyCurveInfluence * FIXED_FOV_POSITION_COMPENSATION
+    end
     bodySpaceMotion.forward = bodySpaceMotion.forward
-        - bodyCurveMotion.forward * (1.0 - bodyBlend)
+        - bodyCurveMotion.forward * (1.0 - bodyCurveInfluence)
     bodySpaceMotion.vertical = bodySpaceMotion.vertical
-        - bodyCurveMotion.vertical * (1.0 - bodyBlend)
+        - bodyCurveMotion.vertical * (1.0 - bodyCurveInfluence)
 
     -- Looking upward moves the native parent both up and backward. Always cancel
     -- the unwanted backward drift. Keep its vertical lift near level view, but
