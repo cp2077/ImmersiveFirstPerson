@@ -20,7 +20,7 @@ local HEIGHT_POSITION_RESTORE_FULL = -40.0
 local HEIGHT_POSITION_RESTORE_OFF = 0.0
 local HEIGHT_BIAS_UP_FULL = 40.0
 local HEIGHT_BIAS_UP_OFF = 80.0
-local HEIGHT_TRANSFER_DURATION = 0.20
+local HEIGHT_TRANSFER_DURATION = 0.03
 local HEIGHT_TRANSFER_TIMEOUT = HEIGHT_TRANSFER_DURATION + 0.30
 local HEIGHT_TRANSFER_TOLERANCE = 0.15
 
@@ -955,7 +955,7 @@ local function composeAndWrite(fpp, context)
         local transfer = runtime.heightTransfer
         -- CET's onUpdate observes the old parent pitch, then REDengine applies
         -- our moving temporary bound before rendering. Predict the clamped
-        -- parent for this frame so each 200 ms handoff step receives the matching
+        -- parent for this frame so each brief handoff step receives the matching
         -- local counter-pitch instead of lagging behind by one rendered frame.
         if transfer.boundProperty == "pitchMax" then
             compositionNativePitch = math.min(
