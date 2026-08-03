@@ -967,18 +967,25 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     local shoulderProgress = smoothstep(
         (absoluteYawProgress - free.SHOULDER_START) / (1.0 - free.SHOULDER_START)
     )
+    -- Once the gaze passes the shoulder into the rear turn, rotation and the
+    -- body-relative setback should continue but lateral translation should not.
+    -- Continuing to slide sideways here creates the detached outer-corner pose.
+    local lateralYawProgress = math.min(
+        absoluteYawProgress,
+        free.SIDE_CORRECTION_FULL_YAW_PROGRESS
+    )
     local lateralShoulderProgress = smoothstep(
-        (absoluteYawProgress - free.LATERAL_START) / (1.0 - free.LATERAL_START)
+        (lateralYawProgress - free.LATERAL_START) / (1.0 - free.LATERAL_START)
     )
 
     local lateralMax = hasWeapon and free.COMBAT_MAX_LATERAL_OFFSET or free.MAX_LATERAL_OFFSET
     -- Translation leads rotation slightly, like the base of a turning head moving
     -- over the shoulder before the gaze reaches the side. Its lower maximum keeps
     -- the earlier movement from making the camera feel detached from the body.
-    local lateralProgress = free.LATERAL_LEAD_BLEND * absoluteYawProgress
+    local lateralProgress = free.LATERAL_LEAD_BLEND * lateralYawProgress
         + (1.0 - free.LATERAL_LEAD_BLEND) * lateralShoulderProgress
     -- Positional/pitch corrections should already be fully engaged around a
-    -- 90-degree side glance; lateral travel itself may continue toward the back.
+    -- 90-degree side glance even though rotational yaw continues toward the back.
     local sideCorrectionProgress = smoothstep(
         absoluteYawProgress / free.SIDE_CORRECTION_FULL_YAW_PROGRESS
     )
