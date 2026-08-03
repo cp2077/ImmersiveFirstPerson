@@ -381,7 +381,7 @@ function ImmersiveFirstPerson.Init()
         if keydown then
             local context = buildCameraContext()
             if context.freeEligible then
-                CameraCore.BeginFreeLook()
+                CameraCore.BeginFreeLook(context)
             end
         else
             CameraCore.EndFreeLook(false)

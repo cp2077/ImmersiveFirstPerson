@@ -34,6 +34,7 @@ local runtime = {
     bodyPitch = 0,
     heightPitch = 0,
     heightApplied = nil,
+    pendingFreeLook = false,
     heightPitchFloor = {
         active = false,
         original = nil,
@@ -1279,10 +1280,37 @@ function CameraCore.OnAction(actionName, value)
     end
 end
 
-function CameraCore.BeginFreeLook()
+function CameraCore.BeginFreeLook(context)
+    if runtime.mode == MODE.FREELOOK then
+        return true
+    end
+    if runtime.heightTransfer.active then
+        runtime.pendingFreeLook = true
+        Helpers.Log("freelook entry deferred until native pitch handoff completes")
+        return true
+    end
+
     local fpp = Helpers.GetFPP()
     if not fpp or not captureBaseline(fpp) then
         return false
+    end
+
+    runtime.pendingFreeLook = false
+    if runtime.mode ~= MODE.RETURNING and context then
+        -- Input callbacks can run after native mouse input but before our next
+        -- onUpdate. Bring the local transform up to the newly sampled parent
+        -- pitch before freezing it, otherwise the first freelook frame repairs a
+        -- stale parent/local pair and appears to jump backward.
+        local previousNativePitch = runtime.nativePitch
+        if not composeAndWrite(fpp, context) then
+            return false
+        end
+        local synchronizedDelta = runtime.nativePitch - previousNativePitch
+        if math.abs(synchronizedDelta) > 0.05 then
+            Helpers.Log((
+                "freelook entry synchronized native pitch by %.2f degrees"
+            ):format(synchronizedDelta))
+        end
     end
 
     if runtime.mode ~= MODE.RETURNING then
@@ -1340,6 +1368,7 @@ function CameraCore.BeginFreeLook()
 end
 
 function CameraCore.EndFreeLook(fast)
+    runtime.pendingFreeLook = false
     if runtime.mode ~= MODE.FREELOOK and runtime.mode ~= MODE.RETURNING then
         return
     end
@@ -1479,6 +1508,13 @@ function CameraCore.Update(delta, context)
     runtime.nativePitch = nativePitch
     updateHeightTransfer(fpp, nativePitch, context, elapsedDelta)
     updateHeightPitchFloor(fpp, context.heightPitch)
+    if runtime.pendingFreeLook and not runtime.heightTransfer.active then
+        runtime.pendingFreeLook = false
+        if context.freeEligible and CameraCore.BeginFreeLook(context) then
+            composeAndWrite(fpp, context)
+            return
+        end
+    end
     runtime.heightPitch = evaluateAppliedHeightPitch(nativePitch, context)
     local visualPitch = nativePitch + runtime.heightPitch
     runtime.bodyProgress = normalizeBodyPitch(visualPitch)
@@ -1516,6 +1552,7 @@ function CameraCore.Suspend(reason)
     abortHeightTransfer(fpp, reason or "suspended", false)
     restoreHeightPitchFloor(fpp)
     runtime.heightApplied = resetNativePitch and false or nil
+    runtime.pendingFreeLook = false
     clearInput()
     runtime.freeYaw = 0
     runtime.freePitch = 0
@@ -1553,6 +1590,7 @@ end
 function CameraCore.Pause(reason)
     local fpp = Helpers.GetFPP()
     clearInput()
+    runtime.pendingFreeLook = false
     runtime.freeYaw = 0
     runtime.freePitch = 0
     runtime.rawYaw = 0
