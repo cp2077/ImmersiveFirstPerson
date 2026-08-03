@@ -975,7 +975,8 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     -- Translation leads rotation slightly, like the base of a turning head moving
     -- over the shoulder before the gaze reaches the side. Its lower maximum keeps
     -- the earlier movement from making the camera feel detached from the body.
-    local lateralProgress = 0.12 * absoluteYawProgress + 0.88 * lateralShoulderProgress
+    local lateralProgress = free.LATERAL_LEAD_BLEND * absoluteYawProgress
+        + (1.0 - free.LATERAL_LEAD_BLEND) * lateralShoulderProgress
     -- Positional/pitch corrections should already be fully engaged around a
     -- 90-degree side glance; lateral travel itself may continue toward the back.
     local sideCorrectionProgress = smoothstep(
@@ -995,13 +996,13 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     local lateralScale = hasWeapon and 1.0
         or 1.0 - free.DOWNWARD_LATERAL_REDUCTION * downwardSideProgress
     local lateral = lateralMax * lateralProgress * lateralScale * sideSign
-    -- Rearward correction starts later than lateral shoulder travel. Pulling
-    -- backward near the centre exposes the neck seam before the camera has
-    -- cleared it sideways.
-    local downwardBackProgress = downwardProgress * smoothstep(
-        (absoluteYawProgress - free.DOWNWARD_BACK_START_YAW_PROGRESS)
-            / (free.DOWNWARD_BACK_FULL_YAW_PROGRESS
-                - free.DOWNWARD_BACK_START_YAW_PROGRESS)
+    -- This setback belongs to the established shoulder pose, not to downward
+    -- pitch. If it faded while the head looked upward at the side, the camera
+    -- slid forward across the torso even though yaw had not changed.
+    local shoulderBackProgress = smoothstep(
+        (absoluteYawProgress - free.SHOULDER_BACK_START_YAW_PROGRESS)
+            / (free.SHOULDER_BACK_FULL_YAW_PROGRESS
+                - free.SHOULDER_BACK_START_YAW_PROGRESS)
     )
 
     -- Do not add a hard yaw deadzone: a shallow power curve delays the visible
@@ -1043,7 +1044,7 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
         -- back out during a side turn to keep the neck seam behind the camera.
         forward = -free.MAX_BACK_OFFSET * sideCorrectionProgress
             - (hasWeapon and 0.0
-                or free.DOWNWARD_BACK_OFFSET * downwardBackProgress),
+                or free.SHOULDER_BACK_OFFSET * shoulderBackProgress),
         vertical = 0.0,
         roll = roll,
         fovDelta = 0.0,
