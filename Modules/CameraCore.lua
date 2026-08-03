@@ -481,19 +481,6 @@ local function restoreHeightPitchFloor(fpp)
         return false
     end
 
-    local current = readNumberProperty(fpp, "pitchMin", nil)
-    if finite(current) and finite(floor.applied)
-        and math.abs(current - floor.applied) > 0.01 then
-        -- Camera contexts such as ladders replace pitchMin after our write. That
-        -- newer value belongs to REDengine; restoring the cached old profile
-        -- would strand its camera limits after the context ends.
-        floor.active = false
-        floor.original = nil
-        floor.applied = nil
-        floor.failureLogged = false
-        return true
-    end
-
     local restored = pcall(function()
         fpp.pitchMin = floor.original
     end)
@@ -516,18 +503,12 @@ end
 
 local function applyHeightPitchFloor(fpp, maximumBias)
     local floor = runtime.heightPitchFloor
-    local current = readNumberProperty(
-        fpp,
-        "pitchMin",
-        Vars.FREELOOK.DEFAULT_PITCH_FLOOR
-    )
     if not floor.active then
-        floor.original = current
-    elseif finite(current) and finite(floor.applied)
-        and math.abs(current - floor.applied) > 0.01 then
-        -- Follow native camera-profile changes while height remains active. In
-        -- particular, LadderEnter/Default/Reset/Exit each own their limits.
-        floor.original = current
+        floor.original = readNumberProperty(
+            fpp,
+            "pitchMin",
+            Vars.FREELOOK.DEFAULT_PITCH_FLOOR
+        )
     end
     if not finite(floor.original) then
         return false

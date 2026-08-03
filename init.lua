@@ -94,10 +94,12 @@ local function buildCameraContext(delta)
         and not blockingThirdPartyMods()
     -- Keep height disabled for the complete swimming high-level state. The
     -- hidden native pitch bias can affect REDengine's pitch-driven dive rules.
-    -- Swimming still uses the normal FPP parent, though, so it is safe to hand
-    -- the correction out once on water entry rather than calling ResetPitch().
+    -- Ladders are also excluded: their Enter/Default/Reset/Exit profiles replace
+    -- pitchMin with a centred floor, and adding height bias to that floor forces
+    -- the camera upward. Vault and non-ladder climb states remain supported.
     local heightContextEligible = heightCameraCompatible
         and not Helpers.IsSwimming()
+        and not Helpers.IsOnLadder()
         and (not Helpers.IsInWorkspot() or Helpers.IsTraversalLocomotion())
     local heightEligible = heightContextEligible
         and Config.inner.heightAdjustmentEnabled
