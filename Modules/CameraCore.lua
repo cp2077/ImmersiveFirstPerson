@@ -959,7 +959,6 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     -- over the shoulder before the gaze reaches the side. Its lower maximum keeps
     -- the earlier movement from making the camera feel detached from the body.
     local lateralProgress = 0.12 * absoluteYawProgress + 0.88 * lateralShoulderProgress
-    local lateral = lateralMax * lateralProgress * sideSign
     -- Positional/pitch corrections should already be fully engaged around a
     -- 90-degree side glance; lateral travel itself may continue toward the back.
     local sideCorrectionProgress = smoothstep(
@@ -969,6 +968,16 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
         (absoluteYawProgress - free.SIDE_CORRECTION_FULL_YAW_PROGRESS)
             / (1.0 - free.SIDE_CORRECTION_FULL_YAW_PROGRESS)
     )
+    local downwardProgress = composedPitch < 0.0
+        and smoothstep(-composedPitch / maxPitchDown)
+        or 0.0
+    -- The extra shoulder clearance is useful near level view, but the same
+    -- distance while looking at the torso places the camera in the outer corner
+    -- of the body. Pull that pose inward laterally and rearward toward the spine.
+    local downwardSideProgress = downwardProgress * sideCorrectionProgress
+    local lateralScale = hasWeapon and 1.0
+        or 1.0 - free.DOWNWARD_LATERAL_REDUCTION * downwardSideProgress
+    local lateral = lateralMax * lateralProgress * lateralScale * sideSign
 
     -- Do not add a hard yaw deadzone: a shallow power curve delays the visible
     -- rotation but remains responsive and still reaches the full cone boundary.
@@ -1007,7 +1016,9 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
         lateral = lateral,
         -- Native look-down travels forward. Ease a small amount of that movement
         -- back out during a side turn to keep the neck seam behind the camera.
-        forward = -free.MAX_BACK_OFFSET * sideCorrectionProgress,
+        forward = -free.MAX_BACK_OFFSET * sideCorrectionProgress
+            - (hasWeapon and 0.0
+                or free.DOWNWARD_BACK_OFFSET * downwardSideProgress),
         vertical = 0.0,
         roll = roll,
         fovDelta = 0.0,
