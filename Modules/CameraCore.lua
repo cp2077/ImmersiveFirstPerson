@@ -967,12 +967,12 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     local shoulderProgress = smoothstep(
         (absoluteYawProgress - free.SHOULDER_START) / (1.0 - free.SHOULDER_START)
     )
-    -- Once the gaze passes the shoulder into the rear turn, rotation and the
-    -- body-relative setback should continue but lateral translation should not.
+    -- Once the gaze passes slightly beyond the shoulder into the rear turn,
+    -- rotation and the body-relative setback continue but lateral translation does not.
     -- Continuing to slide sideways here creates the detached outer-corner pose.
     local lateralYawProgress = math.min(
         absoluteYawProgress,
-        free.SIDE_CORRECTION_FULL_YAW_PROGRESS
+        free.LATERAL_STOP_YAW_PROGRESS
     )
     local lateralShoulderProgress = smoothstep(
         (lateralYawProgress - free.LATERAL_START) / (1.0 - free.LATERAL_START)
@@ -1414,14 +1414,15 @@ local function composeAndWrite(fpp, context)
                     - Vars.FREELOOK.SIDE_FORWARD_HOLD_START_PITCH)
         )
         if sideRiseProgress > 0.0 and freeOffset.sideProgress > 0.0 then
+            local sideRiseBlend = easeOutCubic(sideRiseProgress)
             local sideReferenceBody = CameraCore.EvaluateBody(
                 Vars.FREELOOK.SIDE_FORWARD_HOLD_START_PITCH,
                 context.crouching,
                 runtime.baseline.fov
             )
             local sideTargetForward = sideReferenceBody.forward
-                - Vars.FREELOOK.SIDE_RISE_BACK_OFFSET * sideRiseProgress
-            local sideHold = freeOffset.sideProgress * sideRiseProgress
+                - Vars.FREELOOK.SIDE_RISE_BACK_OFFSET * sideRiseBlend
+            local sideHold = freeOffset.sideProgress * sideRiseBlend
             bodyPosition.forward = bodyPosition.forward
                 + (sideTargetForward - bodyPosition.forward) * sideHold
         end
