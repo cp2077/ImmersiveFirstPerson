@@ -104,7 +104,12 @@ local function buildCameraContext(delta)
         and not blocksHeightForWeapon
     return {
         bodyEligible = commonEligible and not hasWeapon,
-        freeEligible = commonEligible and (not hasWeapon or Config.inner.freeLookInCombat),
+        -- Ladder locomotion swaps among several native camera profiles while
+        -- moving, including a forced recenter profile. Freezing that parent for
+        -- freelook can strand REDengine's pitch floor at the centre afterward.
+        freeEligible = commonEligible
+            and not Helpers.IsOnLadder()
+            and (not hasWeapon or Config.inner.freeLookInCombat),
         heightEligible = heightEligible,
         heightCanTransfer = heightContextEligible,
         heightCanPreserveTransition = heightCameraCompatible,
