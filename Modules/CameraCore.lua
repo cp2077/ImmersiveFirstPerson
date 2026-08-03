@@ -995,6 +995,14 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     local lateralScale = hasWeapon and 1.0
         or 1.0 - free.DOWNWARD_LATERAL_REDUCTION * downwardSideProgress
     local lateral = lateralMax * lateralProgress * lateralScale * sideSign
+    -- Rearward correction starts later than lateral shoulder travel. Pulling
+    -- backward near the centre exposes the neck seam before the camera has
+    -- cleared it sideways.
+    local downwardBackProgress = downwardProgress * smoothstep(
+        (absoluteYawProgress - free.DOWNWARD_BACK_START_YAW_PROGRESS)
+            / (free.DOWNWARD_BACK_FULL_YAW_PROGRESS
+                - free.DOWNWARD_BACK_START_YAW_PROGRESS)
+    )
 
     -- Do not add a hard yaw deadzone: a shallow power curve delays the visible
     -- rotation but remains responsive and still reaches the full cone boundary.
@@ -1035,7 +1043,7 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
         -- back out during a side turn to keep the neck seam behind the camera.
         forward = -free.MAX_BACK_OFFSET * sideCorrectionProgress
             - (hasWeapon and 0.0
-                or free.DOWNWARD_BACK_OFFSET * downwardSideProgress),
+                or free.DOWNWARD_BACK_OFFSET * downwardBackProgress),
         vertical = 0.0,
         roll = roll,
         fovDelta = 0.0,
