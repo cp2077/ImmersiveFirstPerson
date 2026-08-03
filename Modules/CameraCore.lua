@@ -23,6 +23,8 @@ local HEIGHT_BIAS_UP_OFF = 80.0
 local HEIGHT_TRANSFER_DURATION = 0.06
 local HEIGHT_TRANSFER_TIMEOUT = HEIGHT_TRANSFER_DURATION + 0.30
 local HEIGHT_TRANSFER_TOLERANCE = 0.15
+local HEIGHT_ENABLE_SETTLE_DURATION = 0.25
+local HEIGHT_TRANSFER_RETRY_DELAY = 0.75
 
 local runtime = {
     mode = MODE.SUSPENDED,
@@ -34,6 +36,7 @@ local runtime = {
     bodyPitch = 0,
     heightPitch = 0,
     heightApplied = nil,
+    heightEligibilityElapsed = 0.0,
     pendingFreeLook = false,
     heightPitchFloor = {
         active = false,
@@ -52,7 +55,7 @@ local runtime = {
         originalPitchMin = nil,
         originalPitchMax = nil,
         elapsed = 0.0,
-        failedDesired = nil,
+        retryRemaining = 0.0,
     },
     freeYaw = 0,
     freePitch = 0,
@@ -582,9 +585,20 @@ local function abortHeightTransfer(fpp, reason, rememberFailure)
         -- If REDengine refuses the cosmetic handoff, prefer a possible snap back
         -- to the vanilla weapon camera over stranding the height hack in combat.
         runtime.heightApplied = false
-        transfer.failedDesired = nil
+        transfer.retryRemaining = 0.0
     elseif rememberFailure then
-        transfer.failedDesired = transfer.targetApplied
+        -- A failed enable can leave native pitch partway through the handoff.
+        -- Reset that partial state and retry only after normal gameplay has
+        -- remained valid; never latch the feature off for the rest of the session.
+        runtime.heightApplied = false
+        transfer.retryRemaining = HEIGHT_TRANSFER_RETRY_DELAY
+        if fpp then
+            pcall(function()
+                fpp:ResetPitch()
+            end)
+        end
+    else
+        transfer.retryRemaining = 0.0
     end
     transfer.active = false
     transfer.elapsed = 0.0
@@ -641,7 +655,7 @@ local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias
 
     if math.abs(targetNativePitch - nativePitch) <= HEIGHT_TRANSFER_TOLERANCE then
         runtime.heightApplied = desiredApplied
-        transfer.failedDesired = nil
+        transfer.retryRemaining = 0.0
         return true
     end
 
@@ -687,21 +701,30 @@ end
 
 local function updateHeightTransfer(fpp, nativePitch, context, delta)
     local transfer = runtime.heightTransfer
-    local desiredApplied = context.heightEligible == true
+    local desiredApplied = context.heightDesiredApplied == true
+
+    if transfer.retryRemaining > 0.0 then
+        transfer.retryRemaining = math.max(
+            0.0,
+            transfer.retryRemaining - math.max(tonumber(delta) or 0.0, 0.0)
+        )
+    end
 
     if runtime.heightApplied == nil then
         runtime.heightApplied = desiredApplied
-        transfer.failedDesired = nil
         return
-    end
-
-    if transfer.failedDesired ~= nil and transfer.failedDesired ~= desiredApplied then
-        transfer.failedDesired = nil
     end
 
     if transfer.active then
         if desiredApplied ~= transfer.targetApplied then
-            abortHeightTransfer(fpp, "desired state changed", false)
+            -- If enable is interrupted after moving native pitch, merely
+            -- dropping the local counter-pitch exposes that partial movement as
+            -- the exact upward jump this handoff exists to hide.
+            abortHeightTransfer(
+                fpp,
+                "desired state changed",
+                transfer.targetApplied
+            )
         else
             -- A pitch bound only blocks motion on one side. Any motion that made
             -- it through since our previous command is real player input, so move
@@ -761,7 +784,7 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
                 transfer.active = false
                 transfer.elapsed = 0.0
                 runtime.heightApplied = transfer.targetApplied
-                transfer.failedDesired = nil
+                transfer.retryRemaining = 0.0
                 Helpers.Log((
                     "native pitch handoff completed at %.2f"
                 ):format(nativePitch))
@@ -775,7 +798,7 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
 
     if not transfer.active
         and desiredApplied ~= runtime.heightApplied
-        and transfer.failedDesired ~= desiredApplied then
+        and transfer.retryRemaining <= 0.0 then
         local started, reason = beginHeightTransfer(
             fpp,
             nativePitch,
@@ -784,13 +807,16 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
         )
         if not started then
             if desiredApplied then
-                transfer.failedDesired = true
-                Helpers.Log("native pitch handoff unavailable: " .. tostring(reason))
+                transfer.retryRemaining = HEIGHT_TRANSFER_RETRY_DELAY
+                Helpers.Log(
+                    "native pitch handoff unavailable; retry scheduled: "
+                        .. tostring(reason)
+                )
             else
                 -- Never leave the experimental local counter-pitch on a weapon
                 -- camera merely because a seamless native transfer was impossible.
                 runtime.heightApplied = false
-                transfer.failedDesired = nil
+                transfer.retryRemaining = 0.0
                 Helpers.Log(
                     "native pitch handoff unavailable; height forced off: "
                         .. tostring(reason)
@@ -798,6 +824,25 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
             end
         end
     end
+end
+
+local function updateHeightEligibility(context, delta)
+    if context.heightEligible then
+        runtime.heightEligibilityElapsed = math.min(
+            HEIGHT_ENABLE_SETTLE_DURATION,
+            runtime.heightEligibilityElapsed
+                + math.max(tonumber(delta) or 0.0, 0.0)
+        )
+    else
+        runtime.heightEligibilityElapsed = 0.0
+        runtime.heightTransfer.retryRemaining = 0.0
+    end
+
+    -- Turning height off remains immediate for weapons and special camera
+    -- contexts. Turning it back on waits through brief scene-tier, workspot, and
+    -- weapon-slot flicker so traversal cannot start a doomed native handoff.
+    context.heightDesiredApplied = context.heightEligible == true
+        and runtime.heightEligibilityElapsed >= HEIGHT_ENABLE_SETTLE_DURATION
 end
 
 local function evaluateAppliedHeightPitch(nativePitch, context)
@@ -1712,6 +1757,7 @@ function CameraCore.Update(delta, context)
     if not fpp then
         abortHeightTransfer(nil, "FPP camera unavailable", false)
         runtime.heightApplied = nil
+        runtime.heightEligibilityElapsed = 0.0
         clearInput()
         runtime.freeYaw = 0
         runtime.freePitch = 0
@@ -1732,6 +1778,7 @@ function CameraCore.Update(delta, context)
     local elapsedDelta = math.max(tonumber(delta) or 0.0, 0.0)
     local inputDelta = math.min(elapsedDelta, 0.10)
     maintainInputUnlock(fpp)
+    updateHeightEligibility(context, elapsedDelta)
 
     if not context.heightCanTransfer
         and (runtime.heightApplied == true
@@ -1836,6 +1883,8 @@ function CameraCore.Suspend(reason)
     abortHeightTransfer(fpp, reason or "suspended", false)
     restoreHeightPitchFloor(fpp)
     runtime.heightApplied = resetNativePitch and false or nil
+    runtime.heightEligibilityElapsed = 0.0
+    runtime.heightTransfer.retryRemaining = 0.0
     runtime.pendingFreeLook = false
     clearInput()
     runtime.freeYaw = 0
@@ -1927,8 +1976,10 @@ function CameraCore.GetDebugState()
         bodyPitch = runtime.bodyPitch,
         heightPitch = runtime.heightPitch,
         heightApplied = runtime.heightApplied,
+        heightEligibilityElapsed = runtime.heightEligibilityElapsed,
         heightTransferActive = runtime.heightTransfer.active,
         heightTransferTarget = runtime.heightTransfer.targetNativePitch,
+        heightTransferRetryRemaining = runtime.heightTransfer.retryRemaining,
         freeYaw = runtime.freeYaw,
         freePitch = runtime.freePitch,
         rawYaw = runtime.rawYaw,
