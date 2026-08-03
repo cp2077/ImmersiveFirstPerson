@@ -1014,10 +1014,25 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     local shoulderProgress = smoothstep(
         (absoluteYawProgress - free.SHOULDER_START) / (1.0 - free.SHOULDER_START)
     )
+    local lateralShoulderProgress = smoothstep(
+        (absoluteYawProgress - free.LATERAL_START) / (1.0 - free.LATERAL_START)
+    )
 
     local lateralMax = hasWeapon and free.COMBAT_MAX_LATERAL_OFFSET or free.MAX_LATERAL_OFFSET
-    local lateralProgress = 0.20 * absoluteYawProgress + 0.80 * shoulderProgress
+    -- Translation leads rotation slightly, like the base of a turning head moving
+    -- over the shoulder before the gaze reaches the side. Its lower maximum keeps
+    -- the earlier movement from making the camera feel detached from the body.
+    local lateralProgress = 0.12 * absoluteYawProgress + 0.88 * lateralShoulderProgress
     local lateral = lateralMax * lateralProgress * sideSign
+
+    -- Do not add a hard yaw deadzone: a shallow power curve delays the visible
+    -- rotation but remains responsive and still reaches the full cone boundary.
+    local visibleYawProgress = absoluteYawProgress ^ free.YAW_EASE_POWER
+    local visibleYaw = (yaw < 0.0 and -1.0 or 1.0) * visibleYawProgress * maxYaw
+
+    local downwardProgress = clamp(-composedPitch / maxPitchDown, 0.0, 1.0)
+    local pitchLift = hasWeapon and 0.0
+        or free.SIDE_PITCH_LIFT * lateralProgress * downwardProgress
 
     local maxRoll = hasWeapon and free.COMBAT_MAX_ROLL or free.MAX_ROLL
     local roll = -sideSign
@@ -1027,8 +1042,12 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
         * easeOutCubic(absoluteYawProgress)
 
     return {
+        yaw = visibleYaw,
+        pitch = pitchLift,
         lateral = lateral,
-        forward = -0.012 * shoulderProgress,
+        -- Native look-down travels forward. Ease a small amount of that movement
+        -- back out during a side turn to keep the neck seam behind the camera.
+        forward = -free.MAX_BACK_OFFSET * lateralProgress,
         vertical = 0.0,
         roll = roll,
         fovDelta = 0.0,
@@ -1262,6 +1281,8 @@ local function composeAndWrite(fpp, context)
     runtime.bodyPitch = body.pitch
 
     local freeOffset = {
+        yaw = 0.0,
+        pitch = 0.0,
         lateral = 0.0,
         forward = 0.0,
         vertical = 0.0,
@@ -1328,9 +1349,9 @@ local function composeAndWrite(fpp, context)
     }
     local orientation = headLocalOrientation(
         compositionNativePitch,
-        runtime.heightPitch + body.pitch,
+        runtime.heightPitch + body.pitch + freeOffset.pitch,
         effectiveNativePitch - compositionNativePitch,
-        runtime.freeYaw,
+        freeOffset.yaw,
         freeOffset.roll,
         runtime.baseline.orientation
     )
