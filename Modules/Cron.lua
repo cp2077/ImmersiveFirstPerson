@@ -7,13 +7,27 @@ Copyright (c) 2021 psiberx
 
 local Cron = {}
 
+---@class CronTimer
+---@field id integer
+---@field callback fun(args: table)
+---@field recurring boolean
+---@field timeout number
+---@field active boolean
+---@field delay number
+---@field args table
+
+---@class CronTimerCollection
+---@field version string
+---@field [integer] CronTimer
+
+---@type CronTimerCollection
 local timers = { version = '1.0.1' }
 local counter = 0
 
 ---@param timeout number
 ---@param recurring boolean
 ---@param callback function
----@param args
+---@param args? any
 ---@return any
 local function addTimer(timeout, recurring, callback, args)
 	if type(timeout) ~= 'number' then
@@ -79,7 +93,7 @@ end
 
 ---@param timeout number
 ---@param callback function
----@param data
+---@param data? any
 ---@return any
 function Cron.After(timeout, callback, data)
 	return addTimer(timeout, false, callback, data)
@@ -87,14 +101,13 @@ end
 
 ---@param timeout number
 ---@param callback function
----@param data
+---@param data? any
 ---@return any
 function Cron.Every(timeout, callback, data)
 	return addTimer(timeout, true, callback, data)
 end
 
 ---@param timerId any
----@return void
 function Cron.Halt(timerId)
 	if type(timerId) == 'table' then
 		timerId = timerId.id
@@ -109,7 +122,6 @@ function Cron.Halt(timerId)
 end
 
 ---@param timerId any
----@return void
 function Cron.Pause(timerId)
 	if type(timerId) == 'table' then
 		timerId = timerId.id
@@ -124,7 +136,6 @@ function Cron.Pause(timerId)
 end
 
 ---@param timerId any
----@return void
 function Cron.Resume(timerId)
 	if type(timerId) == 'table' then
 		timerId = timerId.id
@@ -139,7 +150,6 @@ function Cron.Resume(timerId)
 end
 
 ---@param delta number
----@return void
 function Cron.Update(delta)
 	if #timers > 0 then
 		for i, timer in ipairs(timers) do

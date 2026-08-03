@@ -286,6 +286,14 @@ function Helpers.IsCarrying()
     end
 end
 
+function Helpers.IsClimbing()
+    local player, blackboardDefs, blackboardSystem = GetPlayerBlackboardDefsAndBlackboardSystemIfAll()
+    if player then
+        local blackboardPSM = blackboardSystem:GetLocalInstanced(player:GetEntityID(), blackboardDefs.PlayerStateMachine)
+        return blackboardPSM:GetInt(blackboardDefs.PlayerStateMachine.Carrying)
+    end
+end
+
 function Helpers.HasWeapon()
     local player = Game.GetPlayer()
     if player then

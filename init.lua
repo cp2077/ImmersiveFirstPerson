@@ -1,4 +1,4 @@
-local ImmersiveFirstPerson = { version = "1.3.1" }
+local ImmersiveFirstPerson = { version = "1.4.3" }
 local Cron = require("Modules/Cron")
 local GameSession = require("Modules/GameSession")
 local GameSettings = require("Modules/GameSettings")
@@ -187,12 +187,12 @@ local lastNativePitch = 0
 local lastNativePitchUsed = false
 
 local freeLookRestore = { progress = 0 }
-function ImmersiveFirstPerson.RestoreFreeCam()
+function ImmersiveFirstPerson.RestoreFreeCam(fast)
     local fpp = Helpers.GetFPP()
     local curEuler = GetSingleton('Quaternion'):ToEulerAngles(fpp:GetLocalOrientation())
     local curPos = fpp:GetLocalPosition()
 
-    if not Config.inner.smoothRestore then
+    if not Config.inner.smoothRestore or fast then
         freeLookRestore.progress = 0
         Helpers.SetRestoringCamera(false)
         Helpers.SetFreeObservation(false)
@@ -354,12 +354,12 @@ function ImmersiveFirstPerson.HandleFreeLook(relX, relY)
     Helpers.SetCamera(x, y, z, roll, pitch, yaw, fov)
 end
 
-function ResetFreeLook()
+function ResetFreeLook(fast)
     Helpers.SetCamera(nil, nil, nil, nil, nil, nil, defaultFovOrNil())
     Helpers.SetRestoringCamera(true)
     Helpers.UnlockMovement()
     lastNativePitchUsed = false
-    ImmersiveFirstPerson.RestoreFreeCam()
+    ImmersiveFirstPerson.RestoreFreeCam(fast)
 end
 
 function SaveNativeSens()
@@ -422,6 +422,10 @@ function ImmersiveFirstPerson.Init()
             isYInverted = Helpers.IsYInverted()
             isXInverted = Helpers.IsXInverted()
         end)
+        Observe("DeathDecisionsWithResurrection", "ToResurrect", function()
+          isLoaded = true
+          defaultFOV = Helpers.GetFOV()
+        end)
 
         GameSession.OnStart(function()
           isLoaded = true
@@ -438,7 +442,10 @@ function ImmersiveFirstPerson.Init()
         end)
         GameSession.OnDeath(function()
           isLoaded = false
-          ResetCamera()
+          if Helpers.IsFreeObservation() then
+            ResetFreeLook(true)
+          end
+          ResetCamera(true)
         end)
         GameSession.OnPause(function()
           isLoaded = false
@@ -484,11 +491,15 @@ function ImmersiveFirstPerson.Init()
             -- local actionType = ListenerAction:GetType(action).value -- gameinputActionType
             local actionValue = ListenerAction:GetValue(action)
             if Helpers.IsFreeObservation() then
-                if actionName == "CameraMouseY" then
-                    ImmersiveFirstPerson.HandleFreeLook(0, actionValue * (isYInverted and -1 or 1))
-                end
-                if actionName == "CameraMouseX" then
-                    ImmersiveFirstPerson.HandleFreeLook(actionValue * (isXInverted and -1 or 1), 0)
+                if actionName == "mouse_left" then
+                    ResetFreeLook(true)
+                else
+                    if actionName == "CameraMouseY" then
+                        ImmersiveFirstPerson.HandleFreeLook(0, actionValue * (isYInverted and -1 or 1))
+                    end
+                    if actionName == "CameraMouseX" then
+                        ImmersiveFirstPerson.HandleFreeLook(actionValue * (isXInverted and -1 or 1), 0)
+                    end
                 end
                 return
             end
@@ -658,6 +669,10 @@ function ImmersiveFirstPerson.Init()
     registerInput("ifp_freelook", "FreeLook", function(keydown)
         if isDisabledByApi then
           return
+        end
+
+        if not isLoaded then
+            return
         end
 
         if not ShouldSetCamera(freeLookInCombat) then

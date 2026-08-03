@@ -1,1 +1,5 @@
-build
+/build/
+/.dev/logs/
+/config.json
+/*.log
+/*.zip

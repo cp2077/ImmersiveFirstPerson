@@ -1,0 +1,38 @@
+{
+  "nativeDB": {
+    "directory": "C:\\Users\\bn\\AppData\\Local\\Cyberpunk2077Modding\\references\\nativedb",
+    "downloadedOn": "2026-08-03",
+    "serverLastModified": "2025-09-11T18:07:54Z",
+    "site": "https://nativedb.red4ext.com/",
+    "sourceRepository": "https://github.com/rayshader/cp2077-nativedb",
+    "files": {
+      "bitfields.json": {
+        "entries": 25,
+        "sha256": "F963C5138C7BE243040B8206FC12B8A29F2257C0696A914B81AA07C57E7D9294",
+        "url": "https://nativedb.red4ext.com/assets/reddump/bitfields.json"
+      },
+      "classes.json": {
+        "entries": 15832,
+        "sha256": "9065374E80F8A20DA72B53AF43956A90490A63BB73ECCC4BC904FFAB9EE63B36",
+        "url": "https://nativedb.red4ext.com/assets/reddump/classes.json"
+      },
+      "enums.json": {
+        "entries": 1524,
+        "sha256": "22660853D0E4BE279B666C88180DE886567587F7E80A287024979A0195F84A18",
+        "url": "https://nativedb.red4ext.com/assets/reddump/enums.json"
+      },
+      "globals.json": {
+        "entries": 802,
+        "sha256": "014D10250601FCFA8E6A07301B5E34BEBC9B665023B3DB89FA76CE6A782EC351",
+        "url": "https://nativedb.red4ext.com/assets/reddump/globals.json"
+      }
+    }
+  },
+  "decompiledScripts": {
+    "directory": "C:\\Users\\bn\\AppData\\Local\\Cyberpunk2077Modding\\references\\decompiled-scripts",
+    "repository": "https://codeberg.org/adamsmasher/cyberpunk.git",
+    "commit": "a2e6bb31298fc7c613e5bfa3d22d424cdeca3f9a",
+    "commitDate": "2025-11-12T22:08:28+01:00",
+    "commitSubject": "2.31 (#27)"
+  }
+}
