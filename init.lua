@@ -141,7 +141,7 @@ local function registerPlayerInput(cetVersion)
         end
 
         CameraCore.OnAction(actionName, actionValue)
-        if (CameraCore.IsFreeLooking() or CameraCore.IsReturning())
+        if CameraCore.IsFreeLooking()
             and freeLookCameraActions[actionName]
             and consumer then
             local consumed = pcall(function()

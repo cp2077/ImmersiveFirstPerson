@@ -7,7 +7,7 @@
 
 Body correction runs while looking down during normal unarmed gameplay. It suspends in vehicles, swimming, takedowns, knockdowns, body carrying, and camera-controlled scenes. FreeLook can optionally remain available while a weapon is equipped.
 
-The mod does not replace `r6/config/settings/platform/pc/options.json` or change saved mouse sensitivity. Native camera input is locked only while FreeLook owns the camera and is restored when its return transition completes.
+The mod does not replace `r6/config/settings/platform/pc/options.json` or change saved mouse sensitivity. Native camera input is locked only while the FreeLook input is held and is released immediately on key-up. The optional visual return uses elapsed time and does not hold native input.
 
 ## Installation
 

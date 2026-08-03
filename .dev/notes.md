@@ -4,7 +4,7 @@
 - 2.31 RTTI confirms `SetLocalTransform(position, rotation)`, quaternion inverse composition, and `gameSetCameraParamsWithOverridesEvent` sensitivity overrides.
 - New core owns one local transform write per frame. Native pitch is recovered from `world * inverse(actualLocal)`; freelook angles are scalar state and never read back from Euler state.
 - Native input lock consumes camera actions before `PlayerPuppet.OnAction`; user settings and component sensitivity are never changed. On 2.31, zeroing `sensitivityMultY` also zeroes CET's vertical action value.
-- Old look-down/body and freelook position curves were ported as named channels without FOV feedback. Return is elapsed-time based and stays locked until complete.
+- Old look-down/body and freelook position curves were ported as named channels without FOV feedback. Return is elapsed-time based.
 - Live checks still needed: action-consumer suppression, mouse/controller direction, and competing-camera detection.
 - First 2.0 hot reload loaded cleanly but revealed that transition-only session/input hooks miss an already attached player; initialization now adopts current `GameSession` state and registers the current player immediately.
 - First freelook test exposed Euler rotation-order coupling: yaw followed the pitched local axis. Freelook now composes explicit `yaw(Z) * pitch(X) * roll(Y)` quaternions and records which mouse/controller axes were seen for live diagnosis.
@@ -13,3 +13,5 @@
 - Freelook anti-clipping follows effective gaze in two independent layers: the normal body-presence curve and a measured emulation of the parent movement lost while native look is locked.
 - A 14-second stationary sweep covered native pitch from -80.1 to +80.0 degrees. Native movement occurs entirely in the parent transform: looking down moves strongly forward; looking up moves strongly backward and upward. The fitted body-local curve is recorded in `notes/native-camera-curve.md`.
 - While freelook freezes the native parent, pitch-driven body offsets must be rotated from the virtual/effective camera frame back into that frozen parent frame. Unarmed vertical limits span the remaining absolute component range; combat keeps its tighter relative head limits.
+- Return timing uses uncapped elapsed time while controller integration alone caps large frame deltas. Native input unlocks on key-up.
+- `SetCameraParamsWithOverridesEvent` changed pitch limits but did not move current native pitch on 2.31. Using `Tier3Scene` for vertical handoff also altered camera context, so this approach was rejected.

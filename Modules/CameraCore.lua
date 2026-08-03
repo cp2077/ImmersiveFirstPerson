@@ -831,6 +831,7 @@ function CameraCore.BeginFreeLook()
         runtime.rawYaw = runtime.freeYaw
         runtime.rawPitch = runtime.freePitch
     end
+
     runtime.returnElapsed = 0
     clearInput()
     runtime.inputSeen.mouseX = false
@@ -864,8 +865,13 @@ function CameraCore.EndFreeLook(fast)
         runtime.freeYaw,
         runtime.freePitch
     ))
+    -- Native camera input belongs to the player again as soon as the key is
+    -- released. Any visual return animation continues without holding input.
+    unlockNativeInput(Helpers.GetFPP())
+
     local immediate = fast == true or not Config.inner.smoothRestore
-    if immediate or (math.abs(runtime.freeYaw) < 0.001 and math.abs(runtime.freePitch) < 0.001) then
+    if immediate
+        or (math.abs(runtime.freeYaw) < 0.001 and math.abs(runtime.freePitch) < 0.001) then
         runtime.freeYaw = 0
         runtime.freePitch = 0
         runtime.rawYaw = 0
@@ -874,7 +880,6 @@ function CameraCore.EndFreeLook(fast)
         runtime.pitchCeiling = nil
         runtime.entryNativePitch = 0.0
         setMode(MODE.BODY, "freelook ended")
-        unlockNativeInput(Helpers.GetFPP())
         return
     end
 
@@ -914,7 +919,8 @@ function CameraCore.Update(delta, context)
         return
     end
 
-    delta = clamp(tonumber(delta) or 0.0, 0.0, 0.10)
+    local elapsedDelta = math.max(tonumber(delta) or 0.0, 0.0)
+    local inputDelta = math.min(elapsedDelta, 0.10)
     maintainInputUnlock(fpp)
 
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
@@ -926,13 +932,13 @@ function CameraCore.Update(delta, context)
         maintainNativeInputLock(fpp)
         if runtime.mode == MODE.FREELOOK then
             applyFreeLookInput(
-                delta,
+                inputDelta,
                 fpp,
                 context.hasWeapon,
                 runtime.nativePitch
             )
         else
-            updateReturn(delta)
+            updateReturn(elapsedDelta)
         end
         composeAndWrite(fpp, context)
         return
