@@ -20,7 +20,8 @@ local HEIGHT_POSITION_RESTORE_FULL = -40.0
 local HEIGHT_POSITION_RESTORE_OFF = 0.0
 local HEIGHT_BIAS_UP_FULL = 40.0
 local HEIGHT_BIAS_UP_OFF = 80.0
-local HEIGHT_TRANSFER_TIMEOUT = 0.30
+local HEIGHT_TRANSFER_DURATION = 0.20
+local HEIGHT_TRANSFER_TIMEOUT = HEIGHT_TRANSFER_DURATION + 0.30
 local HEIGHT_TRANSFER_TOLERANCE = 0.15
 
 local runtime = {
@@ -36,8 +37,11 @@ local runtime = {
     heightTransfer = {
         active = false,
         targetApplied = false,
+        startNativePitch = 0.0,
         targetNativePitch = 0.0,
+        commandedNativePitch = 0.0,
         heldVisualPitch = 0.0,
+        boundProperty = nil,
         originalPitchMin = nil,
         originalPitchMax = nil,
         elapsed = 0.0,
@@ -403,7 +407,7 @@ local function smoothstep(t)
 end
 
 function CameraCore.EvaluateHeightPitch(nativePitch, maximumBias)
-    maximumBias = clamp(tonumber(maximumBias) or 0.0, 0.0, 20.0)
+    maximumBias = clamp(tonumber(maximumBias) or 0.0, 0.0, 30.0)
     if maximumBias <= 0.0 then
         return 0.0
     end
@@ -454,6 +458,7 @@ local function restoreHeightTransferLimits(fpp)
     end
     transfer.originalPitchMin = nil
     transfer.originalPitchMax = nil
+    transfer.boundProperty = nil
 end
 
 local function abortHeightTransfer(fpp, reason, rememberFailure)
@@ -469,6 +474,26 @@ local function abortHeightTransfer(fpp, reason, rememberFailure)
     transfer.active = false
     transfer.elapsed = 0.0
     Helpers.Log("native pitch handoff aborted: " .. tostring(reason))
+end
+
+local function writeHeightTransferBound(fpp, nativePitch)
+    local transfer = runtime.heightTransfer
+    local property = transfer.boundProperty
+    if property ~= "pitchMin" and property ~= "pitchMax" then
+        return false, "temporary pitch bound is missing"
+    end
+
+    local wrote = pcall(function()
+        fpp[property] = nativePitch
+    end)
+    local readback = readNumberProperty(fpp, property, nil)
+    if not wrote or not finite(readback)
+        or math.abs(readback - nativePitch) > 0.01 then
+        return false, property .. " rejected the temporary limit"
+    end
+
+    transfer.commandedNativePitch = nativePitch
+    return true
 end
 
 local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias)
@@ -511,22 +536,21 @@ local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias
 
     transfer.active = true
     transfer.targetApplied = desiredApplied
+    transfer.startNativePitch = nativePitch
     transfer.targetNativePitch = targetNativePitch
+    transfer.commandedNativePitch = nativePitch
     transfer.heldVisualPitch = heldVisualPitch
     transfer.originalPitchMin = originalPitchMin
     transfer.originalPitchMax = originalPitchMax
     transfer.elapsed = 0.0
 
     local property = targetNativePitch < nativePitch and "pitchMax" or "pitchMin"
-    local wrote = pcall(function()
-        fpp[property] = targetNativePitch
-    end)
-    local readback = readNumberProperty(fpp, property, nil)
-    if not wrote or not finite(readback)
-        or math.abs(readback - targetNativePitch) > 0.01 then
+    transfer.boundProperty = property
+    local wrote, reason = writeHeightTransferBound(fpp, nativePitch)
+    if not wrote then
         restoreHeightTransferLimits(fpp)
         transfer.active = false
-        return false, property .. " rejected the temporary limit"
+        return false, reason
     end
 
     Helpers.Log((
@@ -554,8 +578,30 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
             abortHeightTransfer(fpp, "desired state changed", false)
         else
             transfer.elapsed = transfer.elapsed + math.max(tonumber(delta) or 0.0, 0.0)
-            if math.abs(nativePitch - transfer.targetNativePitch)
-                <= HEIGHT_TRANSFER_TOLERANCE then
+            local progress = clamp(
+                transfer.elapsed / HEIGHT_TRANSFER_DURATION,
+                0.0,
+                1.0
+            )
+            local eased = smoothstep(progress)
+            local commandedNativePitch = transfer.startNativePitch
+                + (transfer.targetNativePitch - transfer.startNativePitch) * eased
+            local wrote, reason = writeHeightTransferBound(fpp, commandedNativePitch)
+            if not wrote then
+                abortHeightTransfer(fpp, reason, true)
+                return
+            end
+
+            local reachedTarget
+            if transfer.boundProperty == "pitchMax" then
+                reachedTarget = nativePitch
+                    <= transfer.targetNativePitch + HEIGHT_TRANSFER_TOLERANCE
+            else
+                reachedTarget = nativePitch
+                    >= transfer.targetNativePitch - HEIGHT_TRANSFER_TOLERANCE
+            end
+
+            if progress >= 1.0 and reachedTarget then
                 restoreHeightTransferLimits(fpp)
                 transfer.active = false
                 transfer.elapsed = 0.0
@@ -906,11 +952,22 @@ local function composeAndWrite(fpp, context)
     if runtime.heightTransfer.active
         and runtime.mode ~= MODE.FREELOOK
         and runtime.mode ~= MODE.RETURNING then
+        local transfer = runtime.heightTransfer
         -- CET's onUpdate observes the old parent pitch, then REDengine applies
-        -- our temporary pitch bound before rendering the frame. Compose for the
-        -- already-known destination so the new parent rotation is not rendered
-        -- once with a local transform calculated from the previous pitch.
-        compositionNativePitch = runtime.heightTransfer.targetNativePitch
+        -- our moving temporary bound before rendering. Predict the clamped
+        -- parent for this frame so each 200 ms handoff step receives the matching
+        -- local counter-pitch instead of lagging behind by one rendered frame.
+        if transfer.boundProperty == "pitchMax" then
+            compositionNativePitch = math.min(
+                nativePitch,
+                transfer.commandedNativePitch
+            )
+        elseif transfer.boundProperty == "pitchMin" then
+            compositionNativePitch = math.max(
+                nativePitch,
+                transfer.commandedNativePitch
+            )
+        end
     end
 
     local effectiveNativePitch = compositionNativePitch

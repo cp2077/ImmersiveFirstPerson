@@ -316,7 +316,7 @@ function ImmersiveFirstPerson.Init()
                 "Height bias (degrees)",
                 experimentalHeight.pitchBias,
                 1,
-                20
+                30
             )
             tooltipIfHovered("Runtime-only MVP control; resets when CET reloads.")
         end
