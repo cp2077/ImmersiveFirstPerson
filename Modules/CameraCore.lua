@@ -13,11 +13,11 @@ local MODE = {
     SUSPENDED = "suspended",
 }
 
--- Experimental eye-height hack. The local camera counter-rotates a deliberately
--- upward-biased native camera; these pitch windows fade that bias where the
--- remapping would otherwise interfere with vertical limits or look-down framing.
-local HEIGHT_BIAS_DOWN_OFF = -40.0
-local HEIGHT_BIAS_DOWN_FULL = 0.0
+-- Experimental eye-height hack. Keep its angular bias constant while looking
+-- downward so the visible camera remains exactly 1:1 with native input. Only the
+-- resulting positional lift fades out across this look-down window.
+local HEIGHT_POSITION_RESTORE_FULL = -40.0
+local HEIGHT_POSITION_RESTORE_OFF = 0.0
 local HEIGHT_BIAS_UP_FULL = 40.0
 local HEIGHT_BIAS_UP_OFF = 80.0
 
@@ -30,11 +30,6 @@ local runtime = {
     bodyProgress = 0,
     bodyPitch = 0,
     heightPitch = 0,
-    heightInput = {
-        baseSensitivityY = nil,
-        appliedSensitivityY = nil,
-        compensation = 1.0,
-    },
     freeYaw = 0,
     freePitch = 0,
     rawYaw = 0,
@@ -313,19 +308,6 @@ local function readNumberProperty(object, property, fallback)
     return fallback
 end
 
-local function restoreHeightSensitivity(fpp)
-    local heightInput = runtime.heightInput
-    if fpp and finite(heightInput.baseSensitivityY) then
-        pcall(function()
-            fpp.sensitivityMultY = heightInput.baseSensitivityY
-        end)
-    end
-
-    heightInput.baseSensitivityY = nil
-    heightInput.appliedSensitivityY = nil
-    heightInput.compensation = 1.0
-end
-
 local function lockNativeInput()
     if runtime.lock.active then
         return
@@ -373,7 +355,6 @@ local function captureBaseline(fpp)
 end
 
 local function releaseCamera(fpp)
-    restoreHeightSensitivity(fpp)
     if not runtime.ownsCamera or not runtime.baseline then
         runtime.ownsCamera = false
         runtime.baseline = nil
@@ -408,71 +389,40 @@ local function smoothstep(t)
     return t * t * (3.0 - 2.0 * t)
 end
 
-local function smoothstepDerivative(t)
-    if t <= 0.0 or t >= 1.0 then
-        return 0.0
-    end
-    return 6.0 * t * (1.0 - t)
-end
-
-local function evaluateHeightPitchAndResponse(nativePitch, maximumBias)
+function CameraCore.EvaluateHeightPitch(nativePitch, maximumBias)
     maximumBias = clamp(tonumber(maximumBias) or 0.0, 0.0, 20.0)
     if maximumBias <= 0.0 then
-        return 0.0, 1.0
+        return 0.0
     end
 
-    local downRange = HEIGHT_BIAS_DOWN_FULL - HEIGHT_BIAS_DOWN_OFF
-    local downT = (nativePitch - HEIGHT_BIAS_DOWN_OFF) / downRange
-    local downActivation = smoothstep(downT)
-    local downSlope = smoothstepDerivative(downT) / downRange
-
-    local upRange = HEIGHT_BIAS_UP_OFF - HEIGHT_BIAS_UP_FULL
-    local upT = (nativePitch - HEIGHT_BIAS_UP_FULL) / upRange
-    local upActivation = 1.0 - smoothstep(upT)
-    local upSlope = -smoothstepDerivative(upT) / upRange
-
-    local pitch = -maximumBias * downActivation * upActivation
-    local pitchSlope = -maximumBias
-        * (downSlope * upActivation + downActivation * upSlope)
-
-    -- `1 + pitchSlope` is how much visible pitch results from one degree of
-    -- native pitch. During the downward fade this falls below one, which is the
-    -- otherwise unavoidable "mouse fighting" caused by two rotations cancelling.
-    return pitch, math.max(0.1, 1.0 + pitchSlope)
+    local upActivation = 1.0 - smoothstep(
+        (nativePitch - HEIGHT_BIAS_UP_FULL)
+            / (HEIGHT_BIAS_UP_OFF - HEIGHT_BIAS_UP_FULL)
+    )
+    return -maximumBias * upActivation
 end
 
-function CameraCore.EvaluateHeightPitch(nativePitch, maximumBias)
-    local pitch = evaluateHeightPitchAndResponse(nativePitch, maximumBias)
-    return pitch
+local function evaluateHeightPositionRestore(visualPitch)
+    return 1.0 - smoothstep(
+        (visualPitch - HEIGHT_POSITION_RESTORE_FULL)
+            / (HEIGHT_POSITION_RESTORE_OFF - HEIGHT_POSITION_RESTORE_FULL)
+    )
 end
 
-local function updateHeightSensitivity(fpp, nativePitch, maximumBias)
-    local _, visibleResponse = evaluateHeightPitchAndResponse(nativePitch, maximumBias)
-    local compensation = clamp(1.0 / visibleResponse, 0.25, 4.0)
-    local heightInput = runtime.heightInput
-    local current = readNumberProperty(fpp, "sensitivityMultY", nil)
-    if not finite(current) then
-        restoreHeightSensitivity(fpp)
-        return
+local function nativePitchForVisualPitch(visualPitch, maximumBias)
+    local lower = Vars.FREELOOK.DEFAULT_PITCH_FLOOR - 40.0
+    local upper = Vars.FREELOOK.DEFAULT_PITCH_CEILING + 40.0
+    for _ = 1, 24 do
+        local middle = (lower + upper) * 0.5
+        local middleVisual = middle
+            + CameraCore.EvaluateHeightPitch(middle, maximumBias)
+        if middleVisual < visualPitch then
+            lower = middle
+        else
+            upper = middle
+        end
     end
-
-    if not finite(heightInput.baseSensitivityY) then
-        heightInput.baseSensitivityY = current
-    elseif finite(heightInput.appliedSensitivityY)
-        and math.abs(current - heightInput.appliedSensitivityY) > 0.0001 then
-        -- Camera contexts can replace the multiplier while we own the component.
-        -- Treat that value as the new base instead of restoring stale aim settings.
-        heightInput.baseSensitivityY = current
-    end
-
-    local desired = heightInput.baseSensitivityY * compensation
-    local applied = pcall(function()
-        fpp.sensitivityMultY = desired
-    end)
-    if applied then
-        heightInput.appliedSensitivityY = desired
-        heightInput.compensation = compensation
-    end
+    return (lower + upper) * 0.5
 end
 
 local function normalizeBodyPitch(nativePitch)
@@ -697,21 +647,17 @@ local function applyFreeLookInput(delta, fpp, hasWeapon, basePitch, maximumHeigh
     pitchDelta = pitchDelta
         + inputAxis(runtime.input.stickY) * invertY * controllerScale
 
-    -- Freelook owns its pitch scalar, so compensate the remap directly instead
-    -- of changing the component multiplier used by native mouse/controller look.
-    local _, visibleResponse = evaluateHeightPitchAndResponse(
-        basePitch + runtime.freePitch,
-        maximumHeightBias
-    )
-    pitchDelta = pitchDelta / visibleResponse
-
+    -- The head cone is a visible-space limit. Downward height bias is constant,
+    -- so using the corrected entry pitch preserves the existing soft approach.
+    local visualBasePitch = basePitch
+        + CameraCore.EvaluateHeightPitch(basePitch, maximumHeightBias)
     runtime.freeYaw, runtime.freePitch = stepHeadCone(
         runtime.freeYaw,
         runtime.freePitch,
         yawDelta,
         pitchDelta,
         hasWeapon,
-        basePitch
+        visualBasePitch
     )
     runtime.rawYaw = runtime.freeYaw
     runtime.rawPitch = runtime.freePitch
@@ -785,30 +731,21 @@ local function composeAndWrite(fpp, context)
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
         local floor = runtime.pitchFloor or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
         local ceiling = runtime.pitchCeiling or Vars.FREELOOK.DEFAULT_PITCH_CEILING
-        -- `freePitch` emulates native parent pitch. Keeping that hidden pitch in
-        -- the component's absolute range also lets the height bias fade to zero
-        -- at both vertical poles without reducing the visible camera range.
+        local effectiveFloor = nativePitchForVisualPitch(floor, context.heightPitch)
+        local effectiveCeiling = nativePitchForVisualPitch(ceiling, context.heightPitch)
+        -- `freePitch` emulates native parent pitch, but the limits belong to the
+        -- final visible camera. Invert the experimental pitch mapping so its
+        -- constant downward bias cannot extend freelook below the native floor.
         runtime.freePitch = clamp(
             runtime.freePitch,
-            floor - nativePitch,
-            ceiling - nativePitch
+            effectiveFloor - nativePitch,
+            effectiveCeiling - nativePitch
         )
         effectiveNativePitch = nativePitch + runtime.freePitch
     end
 
-    if runtime.mode == MODE.FREELOOK then
-        -- Native input is consumed in freelook; its custom pitch step is
-        -- compensated in applyFreeLookInput() instead.
-        restoreHeightSensitivity(fpp)
-    elseif context.heightEligible then
-        updateHeightSensitivity(fpp, effectiveNativePitch, context.heightPitch)
-    else
-        restoreHeightSensitivity(fpp)
-    end
-
-    -- During freelook the real parent is frozen, so drive the height fade from
-    -- the emulated native pitch. Looking down therefore removes the height hack
-    -- exactly as native mouse look does.
+    -- During freelook the real parent is frozen, so drive the height adjustment
+    -- from the emulated native pitch as well.
     runtime.heightPitch = CameraCore.EvaluateHeightPitch(
         effectiveNativePitch,
         context.heightPitch
@@ -839,14 +776,18 @@ local function composeAndWrite(fpp, context)
         runtime.baseline.fov
     )
 
-    -- Looking upward moves the native parent both up and backward. Keep the
-    -- vertical part (it is the actual eye-height gain and the point NPCs track),
-    -- but cancel only the unwanted backward drift against the visually corrected
-    -- pitch. This is intentionally body-space before the local conversion below.
+    -- Looking upward moves the native parent both up and backward. Always cancel
+    -- the unwanted backward drift. Keep its vertical lift near level view, but
+    -- progressively return the *local* camera to the recorded visual position
+    -- while looking down. The native parent remains elevated for NPC eye tracking,
+    -- and no opposing angular fade is needed, so vertical input stays 1:1.
     local nativePosition = NativeCameraCurve.Evaluate(effectiveNativePitch)
     local visualPosition = NativeCameraCurve.Evaluate(visualEffectivePitch)
     bodySpaceMotion.forward = bodySpaceMotion.forward
         + visualPosition.forward - nativePosition.forward
+    local positionRestore = evaluateHeightPositionRestore(visualEffectivePitch)
+    bodySpaceMotion.vertical = bodySpaceMotion.vertical
+        + (visualPosition.vertical - nativePosition.vertical) * positionRestore
     local nativeMotion = nativeMotionToCameraLocal(nativePitch, bodySpaceMotion)
     local bodyPosition = {
         lateral = body.lateral,
@@ -947,7 +888,6 @@ function CameraCore.BeginFreeLook()
     if not fpp or not captureBaseline(fpp) then
         return false
     end
-    restoreHeightSensitivity(fpp)
 
     if runtime.mode ~= MODE.RETURNING then
         runtime.freeYaw = 0
@@ -1112,8 +1052,10 @@ function CameraCore.Update(delta, context)
     runtime.heightPitch = CameraCore.EvaluateHeightPitch(nativePitch, context.heightPitch)
     local visualPitch = nativePitch + runtime.heightPitch
     runtime.bodyProgress = normalizeBodyPitch(visualPitch)
-    local heightActive = context.heightEligible and math.abs(runtime.heightPitch) > 0.0001
-    if runtime.bodyProgress <= 0.0001 and not heightActive then
+    -- While the experiment is enabled, retain one baseline even where the bias
+    -- reaches zero. Releasing and recapturing around that boundary causes visible
+    -- one-frame transform chatter as native pitch fluctuates across the threshold.
+    if runtime.bodyProgress <= 0.0001 and not context.heightEligible then
         releaseCamera(fpp)
         setMode(MODE.NATIVE, "camera corrections inactive")
         return
