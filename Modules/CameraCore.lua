@@ -34,6 +34,12 @@ local runtime = {
     bodyPitch = 0,
     heightPitch = 0,
     heightApplied = nil,
+    heightPitchFloor = {
+        active = false,
+        original = nil,
+        applied = nil,
+        failureLogged = false,
+    },
     heightTransfer = {
         active = false,
         targetApplied = false,
@@ -442,6 +448,89 @@ local function nativePitchForVisualPitch(visualPitch, maximumBias)
     return (lower + upper) * 0.5
 end
 
+local function restoreHeightPitchFloor(fpp)
+    local floor = runtime.heightPitchFloor
+    if not floor.active then
+        return true
+    end
+    if not fpp or not finite(floor.original) then
+        return false
+    end
+
+    local restored = pcall(function()
+        fpp.pitchMin = floor.original
+    end)
+    local readback = readNumberProperty(fpp, "pitchMin", nil)
+    if not restored or not finite(readback)
+        or math.abs(readback - floor.original) > 0.01 then
+        if not floor.failureLogged then
+            Helpers.Log("failed to restore native pitch floor")
+            floor.failureLogged = true
+        end
+        return false
+    end
+
+    floor.active = false
+    floor.original = nil
+    floor.applied = nil
+    floor.failureLogged = false
+    return true
+end
+
+local function applyHeightPitchFloor(fpp, maximumBias)
+    local floor = runtime.heightPitchFloor
+    if not floor.active then
+        floor.original = readNumberProperty(
+            fpp,
+            "pitchMin",
+            Vars.FREELOOK.DEFAULT_PITCH_FLOOR
+        )
+    end
+    if not finite(floor.original) then
+        return false
+    end
+
+    local pitchMax = readNumberProperty(
+        fpp,
+        "pitchMax",
+        Vars.FREELOOK.DEFAULT_PITCH_CEILING
+    )
+    local adjusted = nativePitchForVisualPitch(floor.original, maximumBias)
+    adjusted = clamp(adjusted, floor.original, pitchMax - HEIGHT_TRANSFER_TOLERANCE)
+
+    local wrote = pcall(function()
+        fpp.pitchMin = adjusted
+    end)
+    local readback = readNumberProperty(fpp, "pitchMin", nil)
+    if not wrote or not finite(readback)
+        or math.abs(readback - adjusted) > 0.01 then
+        if not floor.failureLogged then
+            Helpers.Log("failed to constrain native pitch floor for height bias")
+            floor.failureLogged = true
+        end
+        return false
+    end
+
+    -- The visible pitch is native pitch plus the local counter-pitch. Raising
+    -- the native floor by the inverse bias keeps their sum at the game's real
+    -- downward limit instead of exposing another 1-30 degrees below the body.
+    floor.active = true
+    floor.applied = adjusted
+    floor.failureLogged = false
+    return true
+end
+
+local function updateHeightPitchFloor(fpp, maximumBias)
+    if runtime.heightTransfer.active then
+        return
+    end
+    if runtime.heightApplied then
+        applyHeightPitchFloor(fpp, maximumBias)
+    else
+        restoreHeightPitchFloor(fpp)
+    end
+end
+
 local function restoreHeightTransferLimits(fpp)
     local transfer = runtime.heightTransfer
     if fpp then
@@ -504,6 +593,10 @@ end
 
 local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias)
     local transfer = runtime.heightTransfer
+    if not desiredApplied and not restoreHeightPitchFloor(fpp) then
+        return false, "native pitch floor could not be restored"
+    end
+
     local originalPitchMin = readNumberProperty(
         fpp,
         "pitchMin",
@@ -526,25 +619,25 @@ local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias
         and nativePitchForVisualPitch(heldVisualPitch, maximumBias)
         or heldVisualPitch
 
-    -- At an absolute pole there may be no native range into which the local
-    -- correction can be transferred. Enabling the experiment can safely wait;
-    -- disabling it for a weapon must still reach a valid vanilla camera pitch.
-    if targetNativePitch < originalPitchMin + HEIGHT_TRANSFER_TOLERANCE
-        or targetNativePitch > originalPitchMax - HEIGHT_TRANSFER_TOLERANCE then
-        if desiredApplied then
-            return false, "target lies outside native pitch range"
-        end
-        targetNativePitch = clamp(
-            targetNativePitch,
-            originalPitchMin + HEIGHT_TRANSFER_TOLERANCE,
-            originalPitchMax - HEIGHT_TRANSFER_TOLERANCE
-        )
-    end
-
     if math.abs(targetNativePitch - nativePitch) <= HEIGHT_TRANSFER_TOLERANCE then
         runtime.heightApplied = desiredApplied
         transfer.failedDesired = nil
         return true
+    end
+
+    -- At an absolute pole there may be no native range into which the local
+    -- correction can be transferred. Enabling the experiment can safely wait;
+    -- disabling it for a weapon must still reach a valid vanilla camera pitch.
+    local targetPitchMin = desiredApplied
+        and nativePitchForVisualPitch(originalPitchMin, maximumBias)
+        or originalPitchMin
+    if targetNativePitch < targetPitchMin + HEIGHT_TRANSFER_TOLERANCE then
+        targetNativePitch = targetPitchMin + HEIGHT_TRANSFER_TOLERANCE
+    elseif targetNativePitch > originalPitchMax - HEIGHT_TRANSFER_TOLERANCE then
+        if desiredApplied then
+            return false, "target lies outside native pitch range"
+        end
+        targetNativePitch = originalPitchMax - HEIGHT_TRANSFER_TOLERANCE
     end
 
     transfer.active = true
@@ -602,9 +695,15 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
                     context.heightPitch
                 )
                 or transfer.heldVisualPitch
+            local targetPitchMin = transfer.targetApplied
+                and nativePitchForVisualPitch(
+                    transfer.originalPitchMin,
+                    context.heightPitch
+                )
+                or transfer.originalPitchMin
             targetNativePitch = clamp(
                 targetNativePitch,
-                transfer.originalPitchMin + HEIGHT_TRANSFER_TOLERANCE,
+                targetPitchMin + HEIGHT_TRANSFER_TOLERANCE,
                 transfer.originalPitchMax - HEIGHT_TRANSFER_TOLERANCE
             )
             transfer.targetNativePitch = targetNativePitch
@@ -1015,6 +1114,15 @@ local function composeAndWrite(fpp, context)
                 transfer.commandedNativePitch
             )
         end
+    elseif runtime.heightPitchFloor.active
+        and finite(runtime.heightPitchFloor.applied) then
+        -- A newly raised persistent floor is clamped after CET's onUpdate just
+        -- like the temporary handoff bounds. Precompose that first clamped frame
+        -- so enabling/reloading the experiment at full look-down cannot flash.
+        compositionNativePitch = math.max(
+            nativePitch,
+            runtime.heightPitchFloor.applied
+        )
     end
 
     local effectiveNativePitch = compositionNativePitch
@@ -1328,6 +1436,7 @@ function CameraCore.Update(delta, context)
 
     if not context.bodyEligible and not context.heightCanTransfer then
         abortHeightTransfer(fpp, "camera context invalid", false)
+        restoreHeightPitchFloor(fpp)
         runtime.heightApplied = nil
         releaseCamera(fpp)
         setMode(MODE.SUSPENDED, "camera context invalid")
@@ -1342,6 +1451,7 @@ function CameraCore.Update(delta, context)
         or runtime.heightApplied == true
         or runtime.heightTransfer.active
     if not context.bodyEligible and not heightManaged then
+        restoreHeightPitchFloor(fpp)
         releaseCamera(fpp)
         setMode(MODE.SUSPENDED, "camera context invalid")
         return
@@ -1355,6 +1465,7 @@ function CameraCore.Update(delta, context)
 
     runtime.nativePitch = nativePitch
     updateHeightTransfer(fpp, nativePitch, context, elapsedDelta)
+    updateHeightPitchFloor(fpp, context.heightPitch)
     runtime.heightPitch = evaluateAppliedHeightPitch(nativePitch, context)
     local visualPitch = nativePitch + runtime.heightPitch
     runtime.bodyProgress = normalizeBodyPitch(visualPitch)
@@ -1387,6 +1498,7 @@ end
 function CameraCore.Suspend(reason)
     local fpp = Helpers.GetFPP()
     abortHeightTransfer(fpp, reason or "suspended", false)
+    restoreHeightPitchFloor(fpp)
     runtime.heightApplied = nil
     clearInput()
     runtime.freeYaw = 0
@@ -1401,6 +1513,26 @@ function CameraCore.Suspend(reason)
     unlockNativeInput(fpp)
     releaseCamera(fpp)
     setMode(MODE.SUSPENDED, reason or "suspended")
+end
+
+function CameraCore.Pause(reason)
+    local fpp = Helpers.GetFPP()
+    clearInput()
+    runtime.freeYaw = 0
+    runtime.freePitch = 0
+    runtime.rawYaw = 0
+    runtime.rawPitch = 0
+    runtime.pitchFloor = nil
+    runtime.pitchCeiling = nil
+    runtime.entryNativePitch = 0.0
+    runtime.returnElapsed = 0
+    unlockNativeInput(fpp)
+
+    -- Escape pauses CET updates, but REDengine renders another gameplay frame
+    -- while closing the menu. Keep our already-composed transform and baseline
+    -- alive so that frame cannot expose the raw neck/body camera. The next
+    -- onUpdate resumes composition from the same ownership state.
+    setMode(MODE.SUSPENDED, reason or "game paused")
 end
 
 function CameraCore.IsFreeLooking()

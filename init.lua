@@ -76,7 +76,11 @@ local function setSessionLoaded(loaded, reason)
     if loaded then
         refreshInputSettings()
     else
-        CameraCore.Suspend(reason)
+        if reason == "game paused" then
+            CameraCore.Pause(reason)
+        else
+            CameraCore.Suspend(reason)
+        end
     end
 end
 
