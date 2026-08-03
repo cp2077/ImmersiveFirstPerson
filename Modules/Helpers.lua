@@ -80,6 +80,35 @@ local function readPlayerStateInt(fieldName, fallback)
     return fallback
 end
 
+local function readPlayerStateBool(fieldName, fallback)
+    local ok, value = pcall(function()
+        local blackboard, definition = getPlayerBlackboard()
+        local field = definition and definition[fieldName]
+        if not blackboard or not field then
+            return fallback
+        end
+        return blackboard:GetBool(field)
+    end)
+
+    if ok then
+        return value
+    end
+    return fallback
+end
+
+local function readPlayerStateEntityID(fieldName)
+    local ok, value = pcall(function()
+        local blackboard, definition = getPlayerBlackboard()
+        local field = definition and definition[fieldName]
+        if not blackboard or not field then
+            return nil
+        end
+        return blackboard:GetEntityID(field)
+    end)
+
+    return ok and value or nil
+end
+
 local function getGameSetting(path)
     local groupPath, variableName = path:match('^(/.+)/([A-Za-z0-9_]+)$')
     local settingsSystem = Game.GetSettingsSystem()
@@ -111,6 +140,18 @@ function Helpers.GetWeaponState()
     return readPlayerStateInt("Weapon", 0)
 end
 
+function Helpers.GetVitalsState()
+    return readPlayerStateInt("Vitals", 0)
+end
+
+function Helpers.GetVehicleState()
+    return readPlayerStateInt("Vehicle", 0)
+end
+
+function Helpers.GetConsumableState()
+    return readPlayerStateInt("Consumable", 0)
+end
+
 function Helpers.IsTraversalLocomotion()
     local state = Helpers.GetDetailedLocomotionState()
     -- gamePSMDetailedLocomotionStates: Climb, Vault, and the four ladder states.
@@ -121,6 +162,12 @@ function Helpers.IsOnLadder()
     local state = Helpers.GetDetailedLocomotionState()
     -- gamePSMDetailedLocomotionStates: Ladder through LadderJump.
     return state >= 10 and state <= 13
+end
+
+function Helpers.IsFelled()
+    -- gamePSMDetailedLocomotionStates.Felled. Unlike an ordinary hard landing,
+    -- this state installs a dedicated camera profile above locomotion.
+    return Helpers.GetDetailedLocomotionState() == 31
 end
 
 function Helpers.IsTakingDown()
@@ -141,6 +188,13 @@ function Helpers.IsSwimming()
 end
 
 function Helpers.IsKnockedDown()
+    local detailedState = Helpers.GetDetailedLocomotionState()
+    if detailedState == 29 or detailedState == 31 then
+        -- The previous status/landing-only test missed the generic Knockdown
+        -- and Felled states, leaving freelook active inside their animations.
+        return true
+    end
+
     if readPlayerStateInt("Landing", 0) > 1 then
         return true
     end
@@ -155,6 +209,47 @@ function Helpers.IsKnockedDown()
             or StatusEffectSystem.ObjectHasStatusEffectOfType(player, "BikeKnockdown")
     end)
     return ok and knockedDown or false
+end
+
+function Helpers.HasRemoteControlledVehicle()
+    local vehicleID = readPlayerStateEntityID("EntityIDVehicleRemoteControlled")
+    if not vehicleID then
+        return false
+    end
+
+    -- EntityID from a blackboard is a CET value type. Reading its hash avoids a
+    -- dependency on a script-side static helper that may not be RTTI-exported.
+    local ok, hash = pcall(function()
+        return vehicleID.hash
+    end)
+    return ok and hash ~= nil and hash ~= 0ULL
+end
+
+function Helpers.IsDeviceCameraActive()
+    return readPlayerStateBool("IsControllingDevice", false)
+        or readPlayerStateBool("IsControllingCamera", false)
+        or readPlayerStateBool("IsUIZoomDevice", false)
+end
+
+function Helpers.IsInMinigame()
+    return readPlayerStateBool("IsInMinigame", false)
+end
+
+function Helpers.IsForceOpeningDoor()
+    return readPlayerStateBool("IsForceOpeningDoor", false)
+end
+
+function Helpers.IsInspecting()
+    local player = Game.GetPlayer()
+    if not player then
+        return false
+    end
+
+    local ok, inspecting = pcall(function()
+        local component = player:GetInspectionComponent()
+        return component and component:GetIsPlayerInspecting()
+    end)
+    return ok and inspecting == true
 end
 
 function Helpers.HasMountedVehicle()

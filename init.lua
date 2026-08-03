@@ -13,6 +13,7 @@ local isDisabledByApi = false
 local heightResetPending = false
 local weaponCameraBlocked = false
 local weaponCameraClearElapsed = 0.0
+local lastCameraBlockReason = nil
 
 local HEIGHT_WEAPON_CLEAR_GRACE = 0.20
 
@@ -39,15 +40,56 @@ local function blockingThirdPartyMods()
     return false
 end
 
-local function commonCameraContextAllowed(sceneTier, isTakingDown)
-    return sceneTier > 0
-        and sceneTier < 3
-        and not Helpers.IsInVehicle()
-        and not Helpers.IsSwimming()
-        and not isTakingDown
-        and not Helpers.IsCarryingBody()
-        and not Helpers.IsKnockedDown()
-        and not blockingThirdPartyMods()
+local function getCameraBlockReason(state)
+    if state.sceneTier <= 0 or state.sceneTier >= 3 then
+        return "scene tier " .. tostring(state.sceneTier)
+    elseif state.vitalsState ~= 0 then
+        return "player not alive"
+    elseif state.inVehicle or state.remoteVehicle then
+        return state.remoteVehicle and "remote vehicle camera" or "vehicle camera"
+    elseif state.deviceCamera then
+        return "device camera"
+    elseif state.inMinigame then
+        return "minigame camera"
+    elseif state.inspecting then
+        return "inspection camera"
+    elseif state.forceOpeningDoor then
+        return "forced-door animation"
+    elseif state.swimming then
+        return "swimming camera"
+    elseif state.takingDown then
+        return "takedown camera"
+    elseif state.carryingBody then
+        return "body-carry camera"
+    elseif state.felled then
+        return "felled camera"
+    elseif state.onLadder then
+        return "ladder camera"
+    elseif state.consumableState ~= 0 then
+        return "consumable camera"
+    elseif state.inWorkspot and not state.traversal then
+        -- Workspot locomotion reports itself as Stand, so the workspot signal
+        -- must win over the otherwise ordinary detailed locomotion value.
+        return "scripted workspot camera"
+    elseif state.knockedDown then
+        return "knockdown camera"
+    elseif blockingThirdPartyMods() then
+        return "third-party camera mod"
+    end
+    return nil
+end
+
+local function logCameraBlockTransition(reason)
+    if reason == lastCameraBlockReason then
+        return
+    end
+
+    if reason then
+        Helpers.Log("camera ownership blocked: " .. reason)
+    elseif lastCameraBlockReason then
+        Helpers.Log("camera ownership restored after: " .. lastCameraBlockReason)
+    end
+    lastCameraBlockReason = reason
 end
 
 local function updateWeaponCameraBlock(hasWeapon, delta)
@@ -77,21 +119,50 @@ local function buildCameraContext(delta)
     local sceneTier = Helpers.GetSceneTier()
     local hasWeapon = Helpers.HasWeapon()
     local isTakingDown = Helpers.IsTakingDown() > 0
+    local state = {
+        sceneTier = sceneTier,
+        vitalsState = Helpers.GetVitalsState(),
+        inVehicle = Helpers.GetVehicleState() ~= 0 or Helpers.IsInVehicle(),
+        remoteVehicle = Helpers.HasRemoteControlledVehicle(),
+        deviceCamera = Helpers.IsDeviceCameraActive(),
+        inMinigame = Helpers.IsInMinigame(),
+        inspecting = Helpers.IsInspecting(),
+        forceOpeningDoor = Helpers.IsForceOpeningDoor(),
+        swimming = Helpers.IsSwimming(),
+        takingDown = isTakingDown,
+        carryingBody = Helpers.IsCarryingBody(),
+        felled = Helpers.IsFelled(),
+        onLadder = Helpers.IsOnLadder(),
+        consumableState = Helpers.GetConsumableState(),
+        traversal = Helpers.IsTraversalLocomotion(),
+        inWorkspot = Helpers.IsInWorkspot(),
+        knockedDown = Helpers.IsKnockedDown(),
+    }
+    local cameraBlockReason = getCameraBlockReason(state)
+    logCameraBlockTransition(cameraBlockReason)
     -- The attachment slot can disappear while the ranged-weapon state machine
     -- still owns the arms/camera. Treat either signal as armed, then keep a short
     -- clear grace for the frame gap at the end of those animations.
     local reportsArmed = hasWeapon or Helpers.GetWeaponState() ~= 0
     local blocksCameraForWeapon = updateWeaponCameraBlock(reportsArmed, delta)
     local commonEligible = isEnabled
-        and commonCameraContextAllowed(sceneTier, isTakingDown)
+        and cameraBlockReason == nil
     -- Height has narrower incompatibilities than the body/freelook camera. Base
     -- locomotion keeps the same FPP parent through jumps, falls, hard landings,
-    -- knockdowns, climbing, and vaulting, so retaining the correction is safer
-    -- than repeatedly transferring it out and back in.
+    -- ordinary knockdowns, climbing, and vaulting, so retaining the correction
+    -- is safer than repeatedly transferring it out and back in. Explicit Felled
+    -- and external-camera states are excluded because they replace that owner.
     local heightCameraCompatible = isEnabled
         and sceneTier == 1
-        and not Helpers.IsInVehicle()
-        and not Helpers.IsCarryingBody()
+        and state.vitalsState == 0
+        and not state.inVehicle
+        and not state.remoteVehicle
+        and not state.deviceCamera
+        and not state.inMinigame
+        and not state.inspecting
+        and not state.forceOpeningDoor
+        and not state.carryingBody
+        and not state.felled
         and not blockingThirdPartyMods()
     -- A takedown remains "compatible" only long enough to transfer the hidden
     -- pitch back while holding the visible view; actual height composition is
@@ -103,9 +174,10 @@ local function buildCameraContext(delta)
     -- the camera upward. Vault and non-ladder climb states remain supported.
     local heightContextEligible = heightCameraCompatible
         and not isTakingDown
-        and not Helpers.IsSwimming()
-        and not Helpers.IsOnLadder()
-        and (not Helpers.IsInWorkspot() or Helpers.IsTraversalLocomotion())
+        and not state.swimming
+        and not state.onLadder
+        and state.consumableState == 0
+        and (not state.inWorkspot or state.traversal)
     local heightEligible = heightContextEligible
         and Config.inner.heightAdjustmentEnabled
         and not blocksCameraForWeapon
@@ -120,7 +192,6 @@ local function buildCameraContext(delta)
         -- moving, including a forced recenter profile. Freezing that parent for
         -- freelook can strand REDengine's pitch floor at the centre afterward.
         freeEligible = commonEligible
-            and not Helpers.IsOnLadder()
             and (not hasWeapon or Config.inner.freeLookInCombat),
         heightEligible = heightEligible,
         heightCanTransfer = heightContextEligible,
@@ -143,6 +214,7 @@ local function setSessionLoaded(loaded, reason)
     if loaded then
         refreshInputSettings()
     else
+        lastCameraBlockReason = nil
         if reason == "game paused" then
             CameraCore.Pause(reason)
         else
