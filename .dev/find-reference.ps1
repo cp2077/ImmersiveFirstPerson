@@ -39,7 +39,8 @@ if ($Source -in @('All', 'NativeDB')) {
 
             $serialized = $entry | ConvertTo-Json -Compress -Depth 32
             if ($serialized -match $literalPattern) {
-                Write-Output "[$category] $($entry.a)"
+                $entryName = if ($fileName -eq 'classes.json') { $entry.b } else { $entry.a }
+                Write-Output "[$category] $entryName"
                 $nativeMatches++
             }
         }

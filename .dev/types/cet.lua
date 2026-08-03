@@ -123,6 +123,9 @@ ImGui = {}
 ---@return boolean
 function ImGui.Begin(...) end
 ---@param ... any
+---@return boolean
+function ImGui.Button(...) end
+---@param ... any
 function ImGui.BeginTooltip(...) end
 ---@param value boolean
 ---@param ... any
@@ -180,11 +183,25 @@ function StatusEffectSystem.ObjectHasStatusEffectOfType(object, effectType) end
 ---@class CETConstructor
 ---@field new fun(...: any): any
 
+---@class CETQuaternionConstructor:CETConstructor
+---@field MulInverse fun(a: any, b: any): any
+---@field SetAxisAngle fun(axis: any, angle: number): any
+
 ---@type CETConstructor
 Vector4 = { new = function(...) return {} end }
----@type CETConstructor
+---@type CETQuaternionConstructor
 Quaternion = { new = function(...) return {} end }
 ---@type CETConstructor
 EulerAngles = { new = function(...) return {} end }
 ---@type CETConstructor
+CName = { new = function(...) return {} end }
+---@type CETConstructor
 TweakDBID = { new = function(...) return {} end }
+
+---@class CETMatrix
+---@field GetTranslation fun(matrix: any): any
+Matrix = {}
+
+---@class CETWorldTransform
+---@field TransformInvPoint fun(transform: any, point: any): any
+WorldTransform = {}
