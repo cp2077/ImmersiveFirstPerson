@@ -25,6 +25,7 @@ local HEIGHT_TRANSFER_TIMEOUT = HEIGHT_TRANSFER_DURATION + 0.30
 local HEIGHT_TRANSFER_TOLERANCE = 0.15
 local HEIGHT_ENABLE_SETTLE_DURATION = 0.25
 local HEIGHT_TRANSFER_RETRY_DELAY = 0.75
+local BODY_WEAPON_TRANSITION_DURATION = 0.08
 
 local runtime = {
     mode = MODE.SUSPENDED,
@@ -34,6 +35,15 @@ local runtime = {
     nativePitch = 0,
     bodyProgress = 0,
     bodyPitch = 0,
+    bodyBlend = nil,
+    bodyContextEligible = nil,
+    bodyWeaponBlocked = nil,
+    bodyTransition = {
+        active = false,
+        elapsed = 0.0,
+        from = 0.0,
+        target = 0.0,
+    },
     heightPitch = 0,
     heightApplied = nil,
     heightEligibilityElapsed = 0.0,
@@ -434,6 +444,67 @@ end
 local function smoothstep(t)
     t = clamp(t, 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
+end
+
+local function setBodyBlendImmediate(target)
+    local transition = runtime.bodyTransition
+    runtime.bodyBlend = target
+    transition.active = false
+    transition.elapsed = 0.0
+    transition.from = target
+    transition.target = target
+end
+
+local function resetBodyBlendTracking()
+    runtime.bodyBlend = nil
+    runtime.bodyContextEligible = nil
+    runtime.bodyWeaponBlocked = nil
+    runtime.bodyTransition.active = false
+    runtime.bodyTransition.elapsed = 0.0
+end
+
+local function updateBodyBlend(context, delta)
+    local contextEligible = context.bodyContextEligible == true
+    local weaponBlocked = context.bodyWeaponBlocked == true
+    local target = context.bodyEligible and 1.0 or 0.0
+    local transition = runtime.bodyTransition
+
+    if runtime.bodyBlend == nil then
+        setBodyBlendImmediate(target)
+    elseif target ~= transition.target then
+        -- Only weapon edges inside one continuously valid FPP context receive a
+        -- blend. Returning from scenes, vehicles, death, or another camera owner
+        -- must adopt the live camera immediately rather than replay this handoff.
+        local weaponEdge = contextEligible
+            and runtime.bodyContextEligible == true
+            and weaponBlocked ~= runtime.bodyWeaponBlocked
+        if weaponEdge then
+            transition.active = true
+            transition.elapsed = 0.0
+            transition.from = runtime.bodyBlend
+            transition.target = target
+        else
+            setBodyBlendImmediate(target)
+        end
+    end
+
+    if transition.active then
+        transition.elapsed = math.min(
+            transition.elapsed + math.max(tonumber(delta) or 0.0, 0.0),
+            BODY_WEAPON_TRANSITION_DURATION
+        )
+        local progress = BODY_WEAPON_TRANSITION_DURATION <= 0.0
+            and 1.0
+            or transition.elapsed / BODY_WEAPON_TRANSITION_DURATION
+        runtime.bodyBlend = transition.from
+            + (transition.target - transition.from) * smoothstep(progress)
+        if progress >= 1.0 then
+            setBodyBlendImmediate(transition.target)
+        end
+    end
+
+    runtime.bodyContextEligible = contextEligible
+    runtime.bodyWeaponBlocked = weaponBlocked
 end
 
 function CameraCore.EvaluateHeightPitch(nativePitch, maximumBias)
@@ -1383,10 +1454,7 @@ local function composeAndWrite(fpp, context)
         context.crouching,
         runtime.baseline.fov
     )
-    if not context.bodyEligible then
-        body = CameraCore.EvaluateBody(0.0, false, runtime.baseline.fov)
-    end
-    runtime.bodyProgress = body.progress
+    local bodyBlend = clamp(tonumber(runtime.bodyBlend) or 0.0, 0.0, 1.0)
 
     local freeOffset = {
         yaw = 0.0,
@@ -1409,15 +1477,29 @@ local function composeAndWrite(fpp, context)
     local bodyInfluence = (runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING)
         and (1.0 - freeOffset.sideProgress)
         or 1.0
+    bodyInfluence = bodyInfluence * bodyBlend
+    runtime.bodyProgress = body.progress * bodyInfluence
     runtime.bodyPitch = body.pitch * bodyInfluence
     body.fov = runtime.baseline.fov
         + (body.fov - runtime.baseline.fov) * bodyInfluence
 
+    local bodyCurveMotion = NativeCameraCurve.OffsetToReference(
+        compositionNativePitch,
+        compositionNativePitch,
+        runtime.baseline.fov
+    )
     local bodySpaceMotion = NativeCameraCurve.OffsetToReference(
         compositionNativePitch,
         effectiveNativePitch,
         runtime.baseline.fov
     )
+    -- OffsetToReference also contains virtual pitch motion used by height and
+    -- freelook. Fade only its ordinary FOV/body component during weapon changes;
+    -- the independent height handoff must continue holding the visible gaze.
+    bodySpaceMotion.forward = bodySpaceMotion.forward
+        - bodyCurveMotion.forward * (1.0 - bodyBlend)
+    bodySpaceMotion.vertical = bodySpaceMotion.vertical
+        - bodyCurveMotion.vertical * (1.0 - bodyBlend)
 
     -- Looking upward moves the native parent both up and backward. Always cancel
     -- the unwanted backward drift. Keep its vertical lift near level view, but
@@ -1769,6 +1851,7 @@ function CameraCore.Update(delta, context)
         abortHeightTransfer(nil, "FPP camera unavailable", false)
         runtime.heightApplied = nil
         runtime.heightEligibilityElapsed = 0.0
+        resetBodyBlendTracking()
         clearInput()
         runtime.freeYaw = 0
         runtime.freePitch = 0
@@ -1790,6 +1873,7 @@ function CameraCore.Update(delta, context)
     local inputDelta = math.min(elapsedDelta, 0.10)
     maintainInputUnlock(fpp)
     updateHeightEligibility(context, elapsedDelta)
+    updateBodyBlend(context, elapsedDelta)
 
     if not context.heightCanPreserveTransition
         and (runtime.heightApplied == true
@@ -1831,7 +1915,7 @@ function CameraCore.Update(delta, context)
         and (runtime.heightApplied == true
             or runtime.heightTransfer.active
             or runtime.heightPitchFloor.active)
-    if not context.bodyEligible
+    if not context.bodyContextEligible
         and not context.heightCanTransfer
         and not preservingHeightTransition then
         CameraCore.Suspend("camera context invalid")
@@ -1842,10 +1926,13 @@ function CameraCore.Update(delta, context)
         runtime.heightApplied = false
     end
 
+    local bodyManaged = context.bodyEligible
+        or runtime.bodyTransition.active
+        or (tonumber(runtime.bodyBlend) or 0.0) > 0.0001
     local heightManaged = context.heightEligible
         or runtime.heightApplied == true
         or runtime.heightTransfer.active
-    if not context.bodyEligible and not heightManaged then
+    if not bodyManaged and not heightManaged then
         restoreHeightPitchFloor(fpp)
         releaseCamera(fpp)
         setMode(MODE.SUSPENDED, "camera context invalid")
@@ -1864,7 +1951,8 @@ function CameraCore.Update(delta, context)
     if not context.bodyEligible
         and not context.heightCanTransfer
         and runtime.heightApplied ~= true
-        and not runtime.heightTransfer.active then
+        and not runtime.heightTransfer.active
+        and not bodyManaged then
         -- The transition-safe height exit has completed. Release ownership now;
         -- unlike Suspend(), this does not reset the native pitch we just moved
         -- into the held visual orientation.
@@ -1926,6 +2014,7 @@ function CameraCore.Suspend(reason)
     runtime.rawYaw = 0
     runtime.rawPitch = 0
     runtime.heightPitch = 0
+    resetBodyBlendTracking()
     runtime.pitchFloor = nil
     runtime.pitchCeiling = nil
     runtime.entryNativePitch = 0.0
@@ -2008,6 +2097,8 @@ function CameraCore.GetDebugState()
         nativePitch = runtime.nativePitch,
         bodyProgress = runtime.bodyProgress,
         bodyPitch = runtime.bodyPitch,
+        bodyBlend = runtime.bodyBlend,
+        bodyTransitionActive = runtime.bodyTransition.active,
         heightPitch = runtime.heightPitch,
         heightApplied = runtime.heightApplied,
         heightEligibilityElapsed = runtime.heightEligibilityElapsed,

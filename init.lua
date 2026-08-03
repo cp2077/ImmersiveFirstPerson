@@ -11,8 +11,8 @@ local isOverlayOpen = false
 local isEnabled = true
 local isDisabledByApi = false
 local heightResetPending = false
-local heightWeaponBlocked = false
-local heightWeaponClearElapsed = 0.0
+local weaponCameraBlocked = false
+local weaponCameraClearElapsed = 0.0
 
 local HEIGHT_WEAPON_CLEAR_GRACE = 0.20
 
@@ -50,27 +50,27 @@ local function commonCameraContextAllowed(sceneTier, isTakingDown)
         and not blockingThirdPartyMods()
 end
 
-local function updateHeightWeaponBlock(hasWeapon, delta)
+local function updateWeaponCameraBlock(hasWeapon, delta)
     if hasWeapon then
-        heightWeaponBlocked = true
-        heightWeaponClearElapsed = 0.0
-    elseif heightWeaponBlocked then
+        weaponCameraBlocked = true
+        weaponCameraClearElapsed = 0.0
+    elseif weaponCameraBlocked then
         if Helpers.GetUpperBodyState() ~= 0 then
             -- Weapon slots disappear during switch, reload, forced-empty-hands,
             -- and traversal animations. Keep the armed block until that state
             -- ends instead of treating the temporary empty slot as a holster.
-            heightWeaponClearElapsed = 0.0
+            weaponCameraClearElapsed = 0.0
         else
-            heightWeaponClearElapsed = heightWeaponClearElapsed
+            weaponCameraClearElapsed = weaponCameraClearElapsed
                 + math.max(tonumber(delta) or 0.0, 0.0)
-            if heightWeaponClearElapsed >= HEIGHT_WEAPON_CLEAR_GRACE then
-                heightWeaponBlocked = false
-                heightWeaponClearElapsed = 0.0
+            if weaponCameraClearElapsed >= HEIGHT_WEAPON_CLEAR_GRACE then
+                weaponCameraBlocked = false
+                weaponCameraClearElapsed = 0.0
             end
         end
     end
 
-    return heightWeaponBlocked
+    return weaponCameraBlocked
 end
 
 local function buildCameraContext(delta)
@@ -81,7 +81,7 @@ local function buildCameraContext(delta)
     -- still owns the arms/camera. Treat either signal as armed, then keep a short
     -- clear grace for the frame gap at the end of those animations.
     local reportsArmed = hasWeapon or Helpers.GetWeaponState() ~= 0
-    local blocksHeightForWeapon = updateHeightWeaponBlock(reportsArmed, delta)
+    local blocksCameraForWeapon = updateWeaponCameraBlock(reportsArmed, delta)
     local commonEligible = isEnabled
         and commonCameraContextAllowed(sceneTier, isTakingDown)
     -- Height has narrower incompatibilities than the body/freelook camera. Base
@@ -108,9 +108,14 @@ local function buildCameraContext(delta)
         and (not Helpers.IsInWorkspot() or Helpers.IsTraversalLocomotion())
     local heightEligible = heightContextEligible
         and Config.inner.heightAdjustmentEnabled
-        and not blocksHeightForWeapon
+        and not blocksCameraForWeapon
     return {
-        bodyEligible = commonEligible and not hasWeapon,
+        -- Weapon draw/holster retains the ordinary FPP parent, so CameraCore may
+        -- crossfade the additive body correction. Truly incompatible contexts
+        -- still suspend immediately instead of inheriting this transition.
+        bodyContextEligible = commonEligible,
+        bodyWeaponBlocked = blocksCameraForWeapon,
+        bodyEligible = commonEligible and not blocksCameraForWeapon,
         -- Ladder locomotion swaps among several native camera profiles while
         -- moving, including a forced recenter profile. Freezing that parent for
         -- freelook can strand REDengine's pitch floor at the centre afterward.
@@ -120,7 +125,7 @@ local function buildCameraContext(delta)
         heightEligible = heightEligible,
         heightCanTransfer = heightContextEligible,
         heightCanPreserveTransition = heightCameraCompatible,
-        heightResetAllowed = heightContextEligible and not blocksHeightForWeapon,
+        heightResetAllowed = heightContextEligible and not blocksCameraForWeapon,
         -- Keep the requested bias available while ineligible so CameraCore can
         -- transfer it into/out of native pitch during weapon transitions.
         heightPitch = Config.inner.heightAdjustmentAmount,
