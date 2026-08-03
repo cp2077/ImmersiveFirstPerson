@@ -726,23 +726,22 @@ local function composeAndWrite(fpp, context)
         roll = 0.0,
         fovDelta = 0.0,
     }
-    local nativeMotion = {
-        forward = 0.0,
-        vertical = 0.0,
-    }
+    local effectiveNativePitch = nativePitch
+    if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
+        effectiveNativePitch = nativePitch + runtime.freePitch
+    end
+    local bodySpaceMotion = NativeCameraCurve.OffsetToReference(
+        nativePitch,
+        effectiveNativePitch,
+        runtime.baseline.fov
+    )
+    local nativeMotion = nativeMotionToCameraLocal(nativePitch, bodySpaceMotion)
     local bodyPosition = {
         lateral = body.lateral,
         forward = body.forward,
         vertical = body.vertical,
     }
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
-        local effectiveNativePitch = nativePitch + runtime.freePitch
-        local bodySpaceMotion = NativeCameraCurve.Delta(
-            runtime.entryNativePitch,
-            effectiveNativePitch
-        )
-        nativeMotion = nativeMotionToCameraLocal(nativePitch, bodySpaceMotion)
-
         -- The body-presence offset is authored in the local frame the native
         -- camera would have at the effective pitch. Rotate it into the frozen
         -- entry parent's frame before writing the component transform.

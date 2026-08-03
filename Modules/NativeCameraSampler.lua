@@ -12,6 +12,7 @@ local state = {
     sampleAccumulator = 0.0,
     samples = {},
     status = "idle",
+    fov = nil,
 }
 
 local function matrixTranslation(matrix)
@@ -39,11 +40,12 @@ end
 
 local function writeCapture(reason)
     local payload = {
-        version = 1,
+        version = 2,
         reason = reason,
         duration = state.elapsed,
         coordinateSpace = "player-local: x=right, y=forward, z=up",
         instructions = "stationary, native vertical sweep up-down-up",
+        fov = state.fov,
         samples = state.samples,
     }
     local encoded = json.encode(payload)
@@ -66,6 +68,7 @@ function NativeCameraSampler.Arm()
     state.elapsed = 0.0
     state.sampleAccumulator = SAMPLE_INTERVAL
     state.samples = {}
+    state.fov = nil
     state.status = "armed; close CET and sweep vertically"
     Helpers.Log("native camera capture armed for 14 seconds")
 end
@@ -74,6 +77,7 @@ function NativeCameraSampler.Cancel()
     state.active = false
     state.status = "cancelled"
     state.samples = {}
+    state.fov = nil
     Helpers.Log("native camera capture cancelled")
 end
 
@@ -102,6 +106,10 @@ function NativeCameraSampler.Update(delta, nativePitch)
     if not player or not fpp or type(nativePitch) ~= "number" then
         state.status = "waiting for the native FPP camera"
         return true
+    end
+
+    if not state.fov then
+        state.fov = Helpers.GetFOV(fpp)
     end
 
     delta = math.max(0.0, math.min(tonumber(delta) or 0.0, 0.10))

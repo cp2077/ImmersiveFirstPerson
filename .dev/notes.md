@@ -16,3 +16,4 @@
 - Return timing uses uncapped elapsed time while controller integration alone caps large frame deltas. Native input unlocks on key-up.
 - `SetCameraParamsWithOverridesEvent` changed pitch limits but did not move current native pitch on 2.31. Using `Tier3Scene` for vertical handoff also altered camera context, so this approach was rejected.
 - Head-cone resistance is directional: only movement farther toward the boundary is softened; tangential and inward movement retain full input speed.
+- Native look-down translation varies strongly with FOV. The FOV 70 and FOV 100 captures now define a continuous positional compensation across the standard slider range; upward movement is effectively unchanged.
