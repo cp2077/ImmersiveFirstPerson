@@ -161,16 +161,14 @@ local function registerPlayerInput(cetVersion)
         if CameraCore.IsFreeLooking()
             and freeLookCameraActions[actionName]
             and consumer then
-            -- Continuous camera axes need the full consumer flag. REDengine's
-            -- own scripts use Consume() for blocked input; ConsumeSingleAction()
-            -- is never used by the shipped scripts and can let later native
-            -- camera listeners see intermittent mouse updates.
+            -- Camera X and Y share an input bundle. Consume() on X suppresses
+            -- the later Y callback entirely, so only consume this one action.
             local consumed = pcall(function()
-                consumer:Consume()
+                consumer:ConsumeSingleAction()
             end)
             if not consumed then
                 pcall(function()
-                    consumer:ConsumeSingleAction()
+                    consumer:Consume()
                 end)
             end
         end
