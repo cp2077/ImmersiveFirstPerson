@@ -1,695 +1,530 @@
-local ImmersiveFirstPerson = { version = "1.3.1" }
-local Cron = require("Modules/Cron")
-local GameSession = require("Modules/GameSession")
-local GameSettings = require("Modules/GameSettings")
-local Vars = require("Modules/Vars")
-local Easings = require("Modules/Easings")
-local Helpers = require("Modules/Helpers")
+local ImmersiveFirstPerson = { version = "2.0.0" }
+local CameraCore = require("Modules/CameraCore")
 local Config = require("Modules/Config")
+local GameSession = require("Modules/GameSession")
+local Helpers = require("Modules/Helpers")
+local NativeCameraSampler = require("Modules/NativeCameraSampler")
 
--- States
-local inited = false
+local initialized = false
 local isLoaded = false
-local defaultFOV = 68
-local initialFOV = 68
 local isOverlayOpen = false
 local isEnabled = true
 local isDisabledByApi = false
-local isYInverted = false
-local isXInverted = false
-local freeLookInCombat = true
+local heightResetPending = false
+local weaponCameraBlocked = false
+local weaponCameraClearElapsed = 0.0
+local lastCameraBlockReason = nil
+
+local HEIGHT_WEAPON_CLEAR_GRACE = 0.20
 
 local API = {}
 
-function API.Enable()
-    isDisabledByApi = false
-    isEnabled = true
-    if ShouldSetCamera(freeLookInCombat) then
-        ImmersiveFirstPerson.HandleCamera(true)
-    end
+function API.StartNativeCameraCapture()
+    CameraCore.Suspend("native camera capture armed")
+    NativeCameraSampler.Arm()
 end
 
-function API.Disable()
-    isEnabled = false
-    isDisabledByApi = true
-    ResetCamera()
-    ResetFreeLook()
+function API.CancelNativeCameraCapture()
+    NativeCameraSampler.Cancel()
+end
+local freeLookCameraActions = {
+    CameraMouseX = true,
+    CameraMouseY = true,
+    CameraX = true,
+    CameraY = true,
+    right_stick_x = true,
+    right_stick_y = true,
+}
+
+local function blockingThirdPartyMods()
+    return false
 end
 
-function API.IsEnabled()
-  return isEnabled
-end
-
-function CombatFreeLook()
-    return freeLookInCombat
-end
-
--- Helpers
-
-function defaultFovOrNil()
-    if not Config.inner.dontChangeFov then
-      return defaultFOV
+local function getCameraBlockReason(state)
+    if state.sceneTier <= 0 or state.sceneTier >= 3 then
+        return "scene tier " .. tostring(state.sceneTier)
+    elseif state.vitalsState ~= 0 then
+        return "player not alive"
+    elseif state.inVehicle or state.remoteVehicle then
+        return state.remoteVehicle and "remote vehicle camera" or "vehicle camera"
+    elseif state.deviceCamera then
+        return "device camera"
+    elseif state.inMinigame then
+        return "minigame camera"
+    elseif state.inspecting then
+        return "inspection camera"
+    elseif state.forceOpeningDoor then
+        return "forced-door animation"
+    elseif state.swimming then
+        return "swimming camera"
+    elseif state.takingDown then
+        return "takedown camera"
+    elseif state.carryingBody then
+        return "body-carry camera"
+    elseif state.felled then
+        return "felled camera"
+    elseif state.onLadder then
+        return "ladder camera"
+    elseif state.consumableState ~= 0 then
+        return "consumable camera"
+    elseif state.inWorkspot and not state.traversal then
+        -- Workspot locomotion reports itself as Stand, so the workspot signal
+        -- must win over the otherwise ordinary detailed locomotion value.
+        return "scripted workspot camera"
+    elseif state.knockedDown then
+        return "knockdown camera"
+    elseif blockingThirdPartyMods() then
+        return "third-party camera mod"
     end
     return nil
 end
 
-local wasReset = true
-function ResetCamera(force)
-    if not wasReset or force then
-        Helpers.ResetCamera(defaultFovOrNil())
-        wasReset = true
+local function logCameraBlockTransition(reason)
+    if reason == lastCameraBlockReason then
+        return
     end
+
+    if reason then
+        Helpers.Log("camera ownership blocked: " .. reason)
+    elseif lastCameraBlockReason then
+        Helpers.Log("camera ownership restored after: " .. lastCameraBlockReason)
+    end
+    lastCameraBlockReason = reason
 end
 
---- Check third party mods
-function blockingThirdPartyMods()
-    -- local gtaTravel = GetMod("gtaTravel")
-    -- if gtaTravel and gtaTravel.api and not gtaTravel.api.done then
-    --     return true
-    -- end
+local function updateWeaponCameraBlock(hasWeapon, delta)
+    if hasWeapon then
+        weaponCameraBlocked = true
+        weaponCameraClearElapsed = 0.0
+    elseif weaponCameraBlocked then
+        if Helpers.GetUpperBodyState() ~= 0 then
+            -- Weapon slots disappear during switch, reload, forced-empty-hands,
+            -- and traversal animations. Keep the armed block until that state
+            -- ends instead of treating the temporary empty slot as a holster.
+            weaponCameraClearElapsed = 0.0
+        else
+            weaponCameraClearElapsed = weaponCameraClearElapsed
+                + math.max(tonumber(delta) or 0.0, 0.0)
+            if weaponCameraClearElapsed >= HEIGHT_WEAPON_CLEAR_GRACE then
+                weaponCameraBlocked = false
+                weaponCameraClearElapsed = 0.0
+            end
+        end
+    end
 
-    return false
+    return weaponCameraBlocked
 end
 
-local lastPitch = 0
-function ShouldSetCamera(ignoreWeapon)
-    if ignoreWeapon == nil then ignoreWeapon = false end
+local function buildCameraContext(delta)
     local sceneTier = Helpers.GetSceneTier()
-    local isFullGameplayScene = sceneTier > 0 and sceneTier < 3
-    return isFullGameplayScene
-        and (not Helpers.HasWeapon() or ignoreWeapon)
-        and not Helpers.IsInVehicle()
-        and not Helpers.IsSwimming()
-        and Helpers.IsTakingDown() <= 0
+    local hasWeapon = Helpers.HasWeapon()
+    local isTakingDown = Helpers.IsTakingDown() > 0
+    local state = {
+        sceneTier = sceneTier,
+        vitalsState = Helpers.GetVitalsState(),
+        inVehicle = Helpers.GetVehicleState() ~= 0 or Helpers.IsInVehicle(),
+        remoteVehicle = Helpers.HasRemoteControlledVehicle(),
+        deviceCamera = Helpers.IsDeviceCameraActive(),
+        inMinigame = Helpers.IsInMinigame(),
+        inspecting = Helpers.IsInspecting(),
+        forceOpeningDoor = Helpers.IsForceOpeningDoor(),
+        swimming = Helpers.IsSwimming(),
+        takingDown = isTakingDown,
+        carryingBody = Helpers.IsCarryingBody(),
+        felled = Helpers.IsFelled(),
+        onLadder = Helpers.IsOnLadder(),
+        consumableState = Helpers.GetConsumableState(),
+        traversal = Helpers.IsTraversalLocomotion(),
+        inWorkspot = Helpers.IsInWorkspot(),
+        knockedDown = Helpers.IsKnockedDown(),
+    }
+    local cameraBlockReason = getCameraBlockReason(state)
+    logCameraBlockTransition(cameraBlockReason)
+    -- The attachment slot can disappear while the ranged-weapon state machine
+    -- still owns the arms/camera. Treat either signal as armed, then keep a short
+    -- clear grace for the frame gap at the end of those animations.
+    local reportsArmed = hasWeapon or Helpers.GetWeaponState() ~= 0
+    local blocksCameraForWeapon = updateWeaponCameraBlock(reportsArmed, delta)
+    local commonEligible = isEnabled
+        and cameraBlockReason == nil
+    -- Height has narrower incompatibilities than the body/freelook camera. Base
+    -- locomotion keeps the same FPP parent through jumps, falls, hard landings,
+    -- ordinary knockdowns, climbing, and vaulting, so retaining the correction
+    -- is safer than repeatedly transferring it out and back in. Explicit Felled
+    -- and external-camera states are excluded because they replace that owner.
+    local heightCameraCompatible = isEnabled
+        and sceneTier == 1
+        and state.vitalsState == 0
+        and not state.inVehicle
+        and not state.remoteVehicle
+        and not state.deviceCamera
+        and not state.inMinigame
+        and not state.inspecting
+        and not state.forceOpeningDoor
+        and not state.carryingBody
+        and not state.felled
         and not blockingThirdPartyMods()
-        and not Helpers.IsCarryingBody()
-        and not Helpers.IsKnockedDown()
+    -- A takedown remains "compatible" only long enough to transfer the hidden
+    -- pitch back while holding the visible view; actual height composition is
+    -- disabled before the authored takedown camera takes ownership.
+    -- Keep height disabled for the complete swimming high-level state. The
+    -- hidden native pitch bias can affect REDengine's pitch-driven dive rules.
+    -- Ladders are also excluded: their Enter/Default/Reset/Exit profiles replace
+    -- pitchMin with a centred floor, and adding height bias to that floor forces
+    -- the camera upward. Vault and non-ladder climb states remain supported.
+    local heightContextEligible = heightCameraCompatible
+        and not isTakingDown
+        and not state.swimming
+        and not state.onLadder
+        and state.consumableState == 0
+        and (not state.inWorkspot or state.traversal)
+    local heightEligible = heightContextEligible
+        and Config.inner.heightAdjustmentEnabled
+        and not blocksCameraForWeapon
+    return {
+        -- Weapon draw/holster retains the ordinary FPP parent, so CameraCore may
+        -- crossfade the additive body correction. Truly incompatible contexts
+        -- still suspend immediately instead of inheriting this transition.
+        bodyContextEligible = commonEligible,
+        bodyWeaponBlocked = blocksCameraForWeapon,
+        bodyEligible = commonEligible and not blocksCameraForWeapon,
+        -- Ladder locomotion swaps among several native camera profiles while
+        -- moving, including a forced recenter profile. Freezing that parent for
+        -- freelook can strand REDengine's pitch floor at the centre afterward.
+        freeEligible = commonEligible
+            and (not hasWeapon or Config.inner.freeLookInCombat),
+        heightEligible = heightEligible,
+        heightCanTransfer = heightContextEligible,
+        heightCanPreserveTransition = heightCameraCompatible,
+        heightResetAllowed = heightContextEligible and not blocksCameraForWeapon,
+        -- Keep the requested bias available while ineligible so CameraCore can
+        -- transfer it into/out of native pitch during weapon transitions.
+        heightPitch = Config.inner.heightAdjustmentAmount,
+        crouching = Helpers.IsCrouching(),
+        hasWeapon = hasWeapon,
+    }
 end
 
-function IsCrouching()
-    return Game.GetPlayer():GetPS():IsCrouch()
+local function refreshInputSettings()
+    CameraCore.SetInputInversion(Helpers.IsXInverted(), Helpers.IsYInverted())
 end
 
--- Handlers
-local wasCrouching = false
-function ImmersiveFirstPerson.HandleCamera(force)
-    if force == nil then force = false end
-
-    if Helpers.IsFreeObservation() then
-        return
+local function setSessionLoaded(loaded, reason)
+    isLoaded = loaded
+    if loaded then
+        refreshInputSettings()
+    else
+        lastCameraBlockReason = nil
+        if reason == "game paused" then
+            CameraCore.Pause(reason)
+        else
+            CameraCore.Suspend(reason)
+        end
     end
+end
 
-    if not ShouldSetCamera() then
-        -- BVFP wil set camera automatically
-        if Helpers.IsInVehicle() and Helpers.HasBVFP() then
+function API.Enable()
+    isDisabledByApi = false
+    isEnabled = true
+end
+
+function API.Disable()
+    isDisabledByApi = true
+    isEnabled = false
+    CameraCore.Suspend("disabled by API")
+end
+
+function API.IsEnabled()
+    return isEnabled
+end
+
+function API.GetCameraState()
+    return CameraCore.GetDebugState()
+end
+
+local function tooltipIfHovered(text)
+    if ImGui.IsItemHovered() then
+        ImGui.BeginTooltip()
+        ImGui.SetTooltip(text)
+        ImGui.EndTooltip()
+    end
+end
+
+local function registerPlayerInput(cetVersion)
+    local function registerInputListeners(player)
+        if not player then
             return
         end
 
-        ResetCamera()
-        return
+        player:RegisterInputListener(player, "CameraMouseX")
+        player:RegisterInputListener(player, "CameraMouseY")
+        player:RegisterInputListener(player, "CameraX")
+        player:RegisterInputListener(player, "CameraY")
+        player:RegisterInputListener(player, "right_stick_x")
+        player:RegisterInputListener(player, "right_stick_y")
+        player:RegisterInputListener(player, "mouse_left")
     end
 
-    local pitchValue = Helpers.GetPitch()
-    if not pitchValue then
-        return
-    end
+    Observe('PlayerPuppet', 'OnGameAttached', function(player)
+        registerInputListeners(player)
+    end)
 
-    local isCrouching = IsCrouching()
-
-    local curPitch = math.floor(math.min(pitchValue + Vars.OFFSET, 0) * 1000) / 1000
-    local maxPitch = -80 + Vars.OFFSET
-
-    local hasPitchNotablyChanged = math.abs(lastPitch - curPitch) >= Vars.PITCH_CHANGE_STEP
-    local hasCrouchingChanged = isCrouching ~= wasCrouching
-    if not hasPitchNotablyChanged and not force and not hasCrouchingChanged then
-        return
-    end
-
-    wasCrouching = isCrouching
-    lastPitch = curPitch
-
-    if not isEnabled then
-        return
-    end
-
-    local progress = math.min(1, curPitch / maxPitch)
-
-    if progress <= 0 then
-        ResetCamera()
-        return
-    end
-
-    -- we set defaultFOV every time in case user has changed it.
-    -- TODO: detect settings change
-    if wasReset then
-        defaultFOV = Helpers.GetFOV()
-    end
-    wasReset = false
-
-    -- crouch-specific multipilers
-    local crouchMultShift = isCrouching and Vars.CROUCH_MULT_SHIFT or 1
-    local crouchMultLean = isCrouching and Vars.CROUCH_MULT_LEAN or 1
-    local crouchMultHeight = isCrouching and Vars.CROUCH_MULT_HEIGHT or 1
-
-    -- shift changes based on FOV, so we take this into account
-    local fovShiftCorrection = Helpers.GetFOV()/68.23
-
-    local f = Helpers.GetFOV()
-    -- TODO: fuck you
-    local poopshit = (68 / f- 1) * 0.22
-
-    -- at the beginning camera goes way too hard down and can clip through stuff like nomad goggles.
-    -- we try to minimize this effect with these multipliers
-    local shiftInitialSlowDown = math.min(1, (progress/Vars.STOP_SHIFT_BOOST_AT))
-    local shift = math.min(1, progress * 4.0) * Vars.SHIFT_BASE_VALUE * crouchMultShift * shiftInitialSlowDown + poopshit
-
-    -- Height goes gradually from 0 to N to -N
-    local heightInitialBoost = math.max(-0.16, 5*progress - math.max(0, (progress-Vars.HEIGHT_INCREASE_KEY_POINT)*8.5))
-
-    -- we don't need a boost if we crouch since the camera is fine as it is
-    local height = math.min(1, progress * 1.0) * Vars.HEIGHT_BASE_VALUE * (isCrouching and 1 or heightInitialBoost) * crouchMultHeight
-
-    local lean = math.min(1, progress * 1.0) * Vars.LEAN_BASE_VALUE * crouchMultLean
-    if Helpers.IsFreeObservation() then
-        lean = nil
-    end
-
-    local f = 68.23 - defaultFOV
-    local fov = math.floor(defaultFOV + f*math.min(1, progress * 2) + ((math.min(1, progress * 1)) * Vars.FOV_BASE_VALUE))
-    if Config.inner.dontChangeFov then
-        fov = nil
-    end
-
-    Helpers.SetCamera(nil, height, shift, nil, lean, nil, fov)
-end
-
-local lastNativePitch = 0
-local lastNativePitchUsed = false
-
-local freeLookRestore = { progress = 0 }
-function ImmersiveFirstPerson.RestoreFreeCam()
-    local fpp = Helpers.GetFPP()
-    local curEuler = GetSingleton('Quaternion'):ToEulerAngles(fpp:GetLocalOrientation())
-    local curPos = fpp:GetLocalPosition()
-
-    if not Config.inner.smoothRestore then
-        freeLookRestore.progress = 0
-        Helpers.SetRestoringCamera(false)
-        Helpers.SetFreeObservation(false)
-        ResetCamera(true)
-        return
-    end
-
-    if curEuler.pitch == 0 and curEuler.roll == 0 and curEuler.yaw == 0 and curPos.x == 0 and curPos.y == 0 and curPos.z == 0 then
-        freeLookRestore.progress = 0
-        Helpers.SetRestoringCamera(false)
-        Helpers.SetFreeObservation(false)
-        return
-    end
-
-    local itersWithSpeed = Vars.FREELOOK_SMOOTH_RESTORE_ITERS / Config.inner.smoothRestoreSpeed * Vars.FREELOOK_SMOOTH_RESTORE_ITERS
-
-    -- local progressEased = Easings.EaseOutCubic(freeLookRestore.progress / itersWithSpeed)
-    local progressEased = (freeLookRestore.progress / itersWithSpeed)
-    local roll = math.floor((curEuler.roll - progressEased * curEuler.roll) * 10) / 10
-    local pitch = math.floor((curEuler.pitch - progressEased * curEuler.pitch) * 10) / 10
-    local yaw = math.floor((curEuler.yaw - progressEased * curEuler.yaw) * 10) / 10
-    local x = math.floor((curPos.x - progressEased * curPos.x) * 1000) / 1000
-    local y = math.floor((curPos.y - progressEased * curPos.y) * 1000) / 1000
-    local z = math.floor((curPos.z - progressEased * curPos.z) * 1000) / 1000
-
-    if freeLookRestore.progress >= itersWithSpeed then
-        roll = 0
-        pitch = 0
-        yaw = 0
-        x = 0
-        y = 0
-        z = 0
-        freeLookRestore.progress = 0
-        Helpers.SetRestoringCamera(false)
-        Helpers.SetFreeObservation(false)
-    end
-
-    Helpers.SetCamera(x, y, z, roll, pitch, yaw)
-    freeLookRestore.progress = freeLookRestore.progress + 1
-end
-
-
-local function curve(t, a, b, c)
-    local y = (1-t)^2 * a + 2*(1-t)*t * b + t^2 * c
-    return y
-end
-
-function ImmersiveFirstPerson.HandleFreeLook(relX, relY)
-    if Helpers.IsRestoringCamera() then
-        return
-    end
-
-    if not ShouldSetCamera(freeLookInCombat) then
-        -- BVFP wil set camera automatically
-        if Helpers.IsInVehicle() and Helpers.HasBVFP() then
+    Observe('PlayerPuppet', 'OnAction', function(first, second, third)
+        if not isLoaded then
             return
         end
 
-        ResetFreeLook()
-        return
-    end
+        local action = cetVersion >= 1.14 and second or first
+        local consumer = cetVersion >= 1.14 and third or second
+        if not action then
+            return
+        end
 
-    local fpp = Helpers.GetFPP()
+        local listenerAction = GetSingleton('gameinputScriptListenerAction')
+        local ok, actionName, actionValue = pcall(function()
+            return Game.NameToString(listenerAction:GetName(action)), listenerAction:GetValue(action)
+        end)
+        if not ok or not actionName then
+            return
+        end
 
-    local curEuler = GetSingleton('Quaternion'):ToEulerAngles(fpp:GetLocalOrientation())
-    local curPos = fpp:GetLocalPosition()
+        if CameraCore.IsFreeLooking() and actionName == "mouse_left" and actionValue > 0 then
+            CameraCore.AbortFreeLook()
+            return
+        end
 
-    local curX = curPos.x
-    local curY = curPos.y
-    local curZ = curPos.z
+        CameraCore.OnAction(actionName, actionValue)
+        if CameraCore.IsFreeLooking()
+            and freeLookCameraActions[actionName]
+            and consumer then
+            -- Camera X and Y share an input bundle. Consume() on X suppresses
+            -- the later Y callback entirely, so only consume this one action.
+            local consumed = pcall(function()
+                consumer:ConsumeSingleAction()
+            end)
+            if not consumed then
+                pcall(function()
+                    consumer:Consume()
+                end)
+            end
+        end
+    end)
 
-    local weapon = Helpers.HasWeapon()
-
-    local curYaw = curEuler.yaw
-    local curRoll = curEuler.roll
-    
-    local zoom = fpp:GetZoom()
-    local xSensitivity = 0.07 / zoom * Config.inner.freeLookSensitivity/20
-    local ySensitivity = 0.07 / zoom * Config.inner.freeLookSensitivity/20
-    
-    local sensXMult = 1
-    local sensYMult = 1
-    
-    local yawingOut = curYaw > 0 and relX > 0 or curYaw < 0 and relX < 0
-    
-    local function easeOutCubic(x)
-        return 1 - (1-x)^3
-    end
-    
-    local function easeOutExp(x)
-        -- return x == 1 and 1 or 1 - 2^(-10*x)
-        return x == 0 and 0 or 2 ^ (5 * x - 5)
-    end
-    
-    
-    -- print(math.abs(curYaw / Vars.FREELOOK_MAX_YAW), easeOutExp(math.abs(curYaw / Vars.FREELOOK_MAX_YAW)))
-    local yawProgress = (yawingOut and easeOutExp(math.abs(curYaw / Vars.FREELOOK_MAX_YAW)) or 0) + (1 - easeOutExp(math.abs(curYaw / Vars.FREELOOK_MAX_YAW)))
-    
-    local yaw = math.min(Vars.FREELOOK_MAX_YAW, math.max( -Vars.FREELOOK_MAX_YAW, (curYaw - (relX*xSensitivity * yawProgress))))
-    
-    local r = (math.abs(curYaw) + 100) / Vars.FREELOOK_MAX_YAW
-
-    local maxPitch = weapon and Vars.FREELOOK_MAX_PITCH_COMBAT_UP or Vars.FREELOOK_MAX_PITCH
-
-    local maxPitchOnYaw = (weapon and curEuler.pitch < 0) and math.min(Vars.FREELOOK_MAX_PITCH_COMBAT, Vars.FREELOOK_MAX_PITCH_COMBAT * r) or maxPitch
-
-    local curPitch = (not weapon and not lastNativePitchUsed) and math.max(-maxPitchOnYaw, lastNativePitch) or curEuler.pitch
-    -- local yaw = -Vars.FREELOOK_MAX_YAW * yawProgress
-
-    local pitchingOut = curPitch > 0 and relY < 0 or curPitch < 0 and relY > 0
-
-    -- yawCorrection need to higher up pitch when approaching high yaw (when looking over shoulder)
-    local pitchSmoothing = ((pitchingOut and easeOutExp(-math.min(0, curPitch / maxPitchOnYaw)) or 0) + (1 - easeOutExp(-math.min(0, curPitch / maxPitchOnYaw))))
-
-    -- local maxPitchOnYawOnYaw = weapon and (Vars.FREELOOK_MAX_PITCH_COMBAT_UP * (0.3 + math.abs((curYaw) / Vars.FREELOOK_MAX_YAW))) or maxPitchOnYaw
-    local pitch = math.min(maxPitchOnYaw, math.max(-maxPitchOnYaw, (curPitch) + (relY*ySensitivity * pitchSmoothing)))
-    lastNativePitchUsed = true
-
-    -- -1(left) +1(right)
-    local delta = (yaw < 0) and 1 or -1
-    local xShiftMultiplier = math.abs(yaw) / Vars.FREELOOK_MAX_YAW * 2
-
-    local freelookMaxXShift = weapon and Vars.FREELOOK_MAX_X_SHIFT_COMBAT or Vars.FREELOOK_MAX_X_SHIFT
-    local x = freelookMaxXShift * xShiftMultiplier * delta
-    
-    -- as we look down we need to move camera sligthly forwards
-    local pitchProgress = -math.min(0, curPitch / maxPitchOnYaw)
-
-    -- local pitchProgress = -math.min(0, curPitch / maxPitch) * (1 - easeOutExp(-math.min(0, curPitch / maxPitch)))
-
-    local rollSmoothMult = easeOutCubic(pitchProgress)
-    local maxRoll = weapon and Vars.FREELOOK_MAX_COMBAT_ROLL or Vars.FREELOOK_MAX_ROLL
-    local roll = maxRoll * (pitchProgress) * (xShiftMultiplier/10) * -delta * rollSmoothMult
-
-    local f = Helpers.GetFOV()
-    -- TODO: fuck you
-    local poopshit = (68 / f - 1) * 0.01
-    local xShiftMultiplierReduction = 1 - (xShiftMultiplier/ 2)
-    -- the closer we are to looking behind our shoulders the less prominent should be X and Y axises
-
-    local endForwardMult = weapon and 40 or 20
-    local startForwardMult = weapon and 0 or 3
-    local y = -curve(pitchProgress, 0, Vars.FREELOOK_MAX_Y*startForwardMult, -Vars.FREELOOK_MAX_Y/endForwardMult-0.05) -0.005*xShiftMultiplier
-
-    local startUpMult = weapon and 0.2 or 1
-    local endUpMult = weapon and 0.001 or 1
-
-    local z = curve(pitchProgress, 0, (-Vars.FREELOOK_MIN_Z * startUpMult), Vars.FREELOOK_MIN_Z/2 * endUpMult  + 0.02 + poopshit*30 * endUpMult) * xShiftMultiplierReduction
-
-    local defaultFOVFixed = defaultFOV + 2
-    local f = 68.23 - defaultFOVFixed
-
-    local fov = math.floor(defaultFOVFixed + f*math.min(1, pitchProgress * 2) + ((math.min(1, pitchProgress)) * -8))
-    if Config.inner.dontChangeFov then
-        fov = nil
-    end
-
-
-    Helpers.SetCamera(x, y, z, roll, pitch, yaw, fov)
+    -- Reload All Mods can happen after OnGameAttached. Register the current player too.
+    registerInputListeners(Game.GetPlayer())
 end
 
-function ResetFreeLook()
-    Helpers.SetCamera(nil, nil, nil, nil, nil, nil, defaultFovOrNil())
-    Helpers.SetRestoringCamera(true)
-    Helpers.UnlockMovement()
-    lastNativePitchUsed = false
-    ImmersiveFirstPerson.RestoreFreeCam()
-end
-
-function SaveNativeSens()
-    if not Config.isReady then
-        return
-    end
-    Config.inner.mouseNativeSensX = GameSettings.Get('/controls/fppcameramouse/FPP_MouseX')
-    Config.inner.mouseNativeSensY = GameSettings.Get('/controls/fppcameramouse/FPP_MouseY')
-    Config.SaveConfig()
-end
--- gamestateMachineGameScriptInterface
--- StateGameScriptInterface extends StateScriptInterface
--- ublic final native func GetObjectFromComponent(targetingComponent: ref<IPlacedComponent>) -> ref<GameObject>
--- public final native func Teleport(objectToTeleport: ref<GameObject>, position: Vector4, orientation: EulerAngles) -> Void
--- Game.GetTeleportationFacility():Teleport(playerPuppet, position, rotation)
-
--- fpp = Game.GetPlayer():GetFPPCameraComponent()
-
--- c = GetSingleton("gamestateMachineGameScriptInterface"):TestCam(-10)
--- c = GetSingleton("gamestateMachineGameScriptInterface"):TestCam(EulerAngles.new(0, -15.6, 0))
--- c:SetOrientationEuler(EulerAngles.new(0, -15.6, 0))
--- Game.GetPlayer():TestCam(GetSingleton("gamestateMachineGameScriptInterface"):GetCameraWorldTransform(), -10)
--- INIT
 function ImmersiveFirstPerson.Init()
     registerForEvent("onShutdown", function()
-        Helpers.UnlockMovement()
-        local fpp = Helpers.GetFPP()
-        if fpp then
-            fpp:ResetPitch()
-            ImmersiveFirstPerson.RestoreFreeCam()
-            Helpers.SetCamera(nil, nil, nil, nil, nil, nil, defaultFovOrNil())
+        isLoaded = false
+        if NativeCameraSampler.IsActive() then
+            NativeCameraSampler.Cancel()
         end
-        ResetCamera()
+        CameraCore.Suspend("CET shutdown")
     end)
+
     registerForEvent("onInit", function()
-        inited = true
+        initialized = true
         Config.InitConfig()
-        defaultFOV = Helpers.GetFOV()
-        isYInverted = Helpers.IsYInverted()
-        isXInverted = Helpers.IsXInverted()
+        refreshInputSettings()
 
-        if Config.inner.mouseNativeSensX == -1 or Config.inner.mouseNativeSensX == nil then
-            SaveNativeSens()
-        end
-
-        if GameSettings.Get('/controls/fppcameramouse/FPP_MouseX') == 0 then
-            Helpers.UnlockMovement()
-        end
-
-        -- Observe("DefaultTransition", "IsPlayerInCombat", function(_, scr)
-            -- print("c:", (Game.GetTimeSystem():GetSimTime():ToFloat(Game.GetTimeSystem():GetSimTime())))
-        --     for var=1,200 do
-        --         Game.GetPlayer():GetFPPCameraComponent():SetLocalOrientation(GetSingleton('EulerAngles'):ToQuat(EulerAngles.new(0, -5.6, 0)))
-        --         Game.GetPlayer():GetFPPCameraComponent():SetLocalOrientation(GetSingleton('EulerAngles'):ToQuat(EulerAngles.new(0, math.random(-800000, 800000)/10000, 0)))
-        --     end
-        -- end)
+        local cetVersion = tonumber((GetVersion():gsub('^v(%d+)%.(%d+)%.(%d+)(.*)', function(major, minor, patch, wip)
+            return ('%d.%02d%02d%d'):format(major, minor, patch, (wip == '' and 0 or 1))
+        end))) or 1.14
+        registerPlayerInput(cetVersion)
 
         Observe("SettingsMainGameController", "OnUninitialize", function()
-            SaveNativeSens()
-            isYInverted = Helpers.IsYInverted()
-            isXInverted = Helpers.IsXInverted()
+            refreshInputSettings()
+        end)
+
+        Observe("DeathDecisionsWithResurrection", "ToResurrect", function()
+            setSessionLoaded(true, "resurrected")
         end)
 
         GameSession.OnStart(function()
-          isLoaded = true
-          defaultFOV = Helpers.GetFOV()
+            setSessionLoaded(true, "session started")
         end)
         GameSession.OnResume(function()
-          isLoaded = true
-          defaultFOV = Helpers.GetFOV()
+            setSessionLoaded(true, "session resumed")
         end)
-
         GameSession.OnEnd(function()
-          isLoaded = false
-          ResetCamera(true)
+            setSessionLoaded(false, "session ended")
         end)
         GameSession.OnDeath(function()
-          isLoaded = false
-          ResetCamera()
+            setSessionLoaded(false, "player died")
         end)
         GameSession.OnPause(function()
-          isLoaded = false
-          ResetCamera()
+            setSessionLoaded(false, "game paused")
         end)
 
-        local cetVer = tonumber((GetVersion():gsub('^v(%d+)%.(%d+)%.(%d+)(.*)', function(major, minor, patch, wip)
-            return ('%d.%02d%02d%d'):format(major, minor, patch, (wip == '' and 0 or 1))
-        end))) or 1.12
-
-        Observe('PlayerPuppet', 'OnGameAttached', function(self, b)
-          self:RegisterInputListener(self, "CameraMouseY")
-          self:RegisterInputListener(self, "CameraMouseX")
-          self:RegisterInputListener(self, "CameraMouseY")
-          self:RegisterInputListener(self, "right_stick_y")
-          self:RegisterInputListener(self, "CameraY")
-          self:RegisterInputListener(self, "UI_MoveY_Axis")
-          self:RegisterInputListener(self, "MeleeBlock")
-          self:RegisterInputListener(self, "RangedADS")
-          self:RegisterInputListener(self, "CameraAim")
-          self:RegisterInputListener(self, "MeleeAttack")
-          self:RegisterInputListener(self, "RangedAttack")
-          self:RegisterInputListener(self, "mouse_left")
-          self:RegisterInputListener(self, "click")
-          self:RegisterInputListener(self, "SwitchItem")
-          self:RegisterInputListener(self, "WeaponWheel")
-        end)
-
-        Observe('PlayerPuppet', 'OnAction', function(a, b)
-            if not isLoaded then
-              return
-            end
-
-            -- TODO: not sure if this is redundant
-            local action = a
-            if cetVer >= 1.14 then
-                action = b
-            end
-
-            -- print("a:", (Game.GetTimeSystem():GetSimTime():ToFloat(Game.GetTimeSystem():GetSimTime())))
-            local ListenerAction = GetSingleton('gameinputScriptListenerAction')
-            local actionName = Game.NameToString(ListenerAction:GetName(action))
-            -- local actionType = ListenerAction:GetType(action).value -- gameinputActionType
-            local actionValue = ListenerAction:GetValue(action)
-            if Helpers.IsFreeObservation() then
-                if actionName == "CameraMouseY" then
-                    ImmersiveFirstPerson.HandleFreeLook(0, actionValue * (isYInverted and -1 or 1))
-                end
-                if actionName == "CameraMouseX" then
-                    ImmersiveFirstPerson.HandleFreeLook(actionValue * (isXInverted and -1 or 1), 0)
-                end
-                return
-            end
-
-            if actionName == "CameraMouseY"
-               or actionName == "right_stick_y"
-               or actionName == "CameraY"
-               or actionName == "UI_MoveY_Axis"
-               or actionName == "MeleeBlock"
-               or actionName == "RangedADS"
-               or actionName == "CameraAim"
-               or actionName == "MeleeAttack"
-               or actionName == "RangedAttack"
-               or actionName == "mouse_left"
-               or actionName == "click"
-               or actionName == "SwitchItem"
-               or actionName == "WeaponWheel"
-               then
-                 ImmersiveFirstPerson.HandleCamera()
-            end
-        end)
-
-        Cron.Every(0.65, function ()
-            if isLoaded then
-              ImmersiveFirstPerson.HandleCamera()
-            end
-        end)
+        -- GameSession callbacks describe transitions. On a hot reload there may be no
+        -- transition, so adopt the state that GameSession discovered during registration.
+        local sessionActive = GameSession.IsLoaded()
+            and not GameSession.IsPaused()
+            and not GameSession.IsDead()
+        setSessionLoaded(sessionActive, sessionActive and "CET initialized" or "no active session")
     end)
 
     registerForEvent("onUpdate", function(delta)
-        Cron.Update(delta)
-
-        if not isLoaded then
-          return
-        end
-
-        if Helpers.IsRestoringCamera() then
-            ImmersiveFirstPerson.RestoreFreeCam()
-        end
-
-        --     for var=1,300 do
-        --         Game.GetPlayer():GetFPPCameraComponent():SetLocalOrientation(GetSingleton('EulerAngles'):ToQuat(EulerAngles.new(0, -5.6, 0)))
-        --         -- Game.GetPlayer():GetFPPCameraComponent():SetLocalOrientationAlt(EulerAngles.new(0, -5.6, 0))
-        --     end
-
-
-        if not inited then
+        if not initialized or not isLoaded then
             return
         end
 
-        if Helpers.IsFreeObservation() and not ShouldSetCamera(freeLookInCombat) and not Helpers.IsRestoringCamera() then
-            if Helpers.IsInVehicle() and Helpers.HasBVFP() then
-                return
-            end
-
-            ResetFreeLook()
+        if NativeCameraSampler.IsActive() then
+            CameraCore.Suspend("recording native camera")
+            NativeCameraSampler.Update(delta, CameraCore.ReadNativePitch())
             return
         end
+
+        local context = buildCameraContext(delta)
+        if heightResetPending and context.heightResetAllowed then
+            CameraCore.ResetHeightAdjustment("height setting changed")
+            heightResetPending = false
+            context = buildCameraContext(0.0)
+        end
+        CameraCore.Update(delta, context)
     end)
 
-    function TooltipIfHovered(text)
-        if ImGui.IsItemHovered() then
-            ImGui.BeginTooltip()
-            ImGui.SetTooltip(text)
-            ImGui.EndTooltip()
-        end
-    end
-
     registerForEvent("onDraw", function()
-        -- print("u:", (Game.GetTimeSystem():GetSimTime():ToFloat(Game.GetTimeSystem():GetSimTime())))
-        -- print("-", Game.GetSimTime():ToFloat(Game.GetSimTime()))
-        -- for var=1,1000000 do
-        --     if var == 1000000 then
-        --         for var=1,900 do
-        --             Game.GetPlayer():GetFPPCameraComponent():SetLocalOrientation(GetSingleton('EulerAngles'):ToQuat(EulerAngles.new(0, -5.6, 0)))
-        --         end
-        --     end
-        -- end
-        --
         if not isOverlayOpen then
             return
         end
 
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, 300, 40)
-        ImGui.Begin("ImmersiveFirstPerson", ImGuiWindowFlags.AlwaysAutoResize)
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, 310, 40)
+        ImGui.Begin("Immersive First Person")
 
-        -- IS ENABLED
-        isEnabled, IsEnabledToggled = ImGui.Checkbox("Enabled", isEnabled)
-        if IsEnabledToggled then
-            if isEnabled and ShouldSetCamera(freeLookInCombat) then
-                ImmersiveFirstPerson.HandleCamera(true)
-            elseif not Helpers.IsInVehicle() or (Helpers.IsInVehicle() and not Helpers.HasBVFP()) then
-                ResetCamera()
+        local changed
+        isEnabled, changed = ImGui.Checkbox("Enabled", isEnabled)
+        if changed then
+            if isEnabled then
+                isDisabledByApi = false
+            else
+                CameraCore.Suspend("disabled in overlay")
             end
         end
-        ImGui.Text("")
 
-        -- dont change fov
-        Config.inner.dontChangeFov, changed = ImGui.Checkbox("Don't change FOV (may cause clipping)", Config.inner.dontChangeFov)
+        Config.inner.dontChangeFov, changed = ImGui.Checkbox(
+            "Don't change FOV (may cause clipping)",
+            Config.inner.dontChangeFov
+        )
         if changed then
             Config.SaveConfig()
-            if isEnabled and isLoaded then
-                if Config.inner.dontChangeFov then
-                  Helpers.ResetFOV(defaultFOV)
-                end
+            if Config.inner.dontChangeFov then
+                CameraCore.RestoreBaselineFOV()
             end
         end
 
-        -- WARNING ABOUT TRANSITION
-        ImGui.PushStyleColor(ImGuiCol.Button, 0.60, 0.20, 0.30, 0.8)
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0.60, 0.20, 0.30, 0.8)
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0.60, 0.20, 0.30, 0.8)
-        ImGui.SmallButton("WARNING!")
-        ImGui.PopStyleColor(3)
-        local msg = "If your character stuck during transition,\nload the latest save file and"
-        msg = msg .. " then either turn this option off or increase the transition speed.\nThis is caused by internal game bug and for now is unfixable."
-        TooltipIfHovered(msg)
-
-        -- to supress linter
-        local changed = false
-
-        -- SMOOTH TRANSITION
-        Config.inner.smoothRestore, changed = ImGui.Checkbox("Smooth transition for FreeLook", Config.inner.smoothRestore)
-        TooltipIfHovered(msg)
+        Config.inner.smoothRestore, changed = ImGui.Checkbox(
+            "Smooth FreeLook return",
+            Config.inner.smoothRestore
+        )
         if changed then
             Config.SaveConfig()
-            if isEnabled and ShouldSetCamera(freeLookInCombat) then
-                ImmersiveFirstPerson.HandleCamera(true)
-            elseif not Helpers.IsInVehicle() or (Helpers.IsInVehicle() and not Helpers.HasBVFP()) then
-                ResetCamera()
-            end
         end
+
         if Config.inner.smoothRestore then
-        -- smoothRestore speed
-            Config.inner.smoothRestoreSpeed, changed = ImGui.SliderInt("Transition speed", math.floor(Config.inner.smoothRestoreSpeed), 1, 200)
+            Config.inner.smoothRestoreSpeed, changed = ImGui.SliderInt(
+                "Return speed",
+                math.floor(Config.inner.smoothRestoreSpeed),
+                1,
+                200
+            )
+            tooltipIfHovered("Higher values return to native view faster.")
             if changed then
                 Config.SaveConfig()
             end
         end
-        ImGui.Text("")
 
-        -- freelook sensitivity
-        Config.inner.freeLookSensitivity, changed = ImGui.SliderInt("FreeLook sensitivity", math.floor(Config.inner.freeLookSensitivity), 1, 100)
+        Config.inner.freeLookSensitivity, changed = ImGui.SliderInt(
+            "FreeLook sensitivity",
+            math.floor(Config.inner.freeLookSensitivity),
+            1,
+            100
+        )
         if changed then
             Config.SaveConfig()
         end
 
-        -- freelook in combat
-        -- freeLookInCombat, changed = ImGui.Checkbox("Enable FreeLook in combat", freeLookInCombat)
-        -- if changed then
-        --     Config.SaveConfig()
-        -- end
+        Config.inner.freeLookInCombat, changed = ImGui.Checkbox(
+            "Enable FreeLook with a weapon",
+            Config.inner.freeLookInCombat
+        )
+        if changed then
+            Config.SaveConfig()
+        end
 
+        ImGui.Separator()
+        ImGui.Text("Experimental")
+        Config.inner.heightAdjustmentEnabled, changed = ImGui.Checkbox(
+            "Enable height adjustment",
+            Config.inner.heightAdjustmentEnabled
+        )
+        tooltipIfHovered("Experimental apparent player-height adjustment.")
+        if changed then
+            Config.SaveConfig()
+            heightResetPending = true
+        end
+        if Config.inner.heightAdjustmentEnabled then
+            Config.inner.heightAdjustmentAmount, changed = ImGui.SliderInt(
+                "Height amount",
+                math.floor(Config.inner.heightAdjustmentAmount),
+                1,
+                30
+            )
+            tooltipIfHovered("Higher values increase height and the chance of camera artifacts.")
+            if changed then
+                Config.SaveConfig()
+                heightResetPending = true
+            end
+            ImGui.TextWrapped(
+                "Experimental: active only during normal on-foot gameplay with weapons "
+                    .. "holstered. Larger values may cause clipping, visual artifacts, "
+                    .. "or unusual mouse/camera movement."
+            )
+        end
+
+        ImGui.Text("Camera state: " .. CameraCore.GetMode())
+        --[[ Native camera sampling UI is retained for future curve captures.
+        ImGui.Text("Native camera sampler: " .. NativeCameraSampler.GetStatus())
+        if NativeCameraSampler.IsActive() then
+            if ImGui.Button("Cancel native camera recording") then
+                NativeCameraSampler.Cancel()
+            end
+        else
+            ImGui.Text("Stand still, holster weapon, and look fully up before recording.")
+            ImGui.Text("After closing CET, sweep fully down and back up over 14 seconds.")
+            if ImGui.Button("Record native vertical camera curve") then
+                API.StartNativeCameraCapture()
+            end
+        end
+        ]]
         ImGui.End()
         ImGui.PopStyleVar(1)
-
     end)
 
     registerHotkey("ifp_toggle_enabled", "Toggle Enabled", function()
         isEnabled = not isEnabled
-        if isEnabled and ShouldSetCamera() then
-            ImmersiveFirstPerson.HandleCamera(true)
-        elseif not Helpers.IsInVehicle() or (Helpers.IsInVehicle() and not Helpers.HasBVFP()) then
-            ResetCamera()
+        if isEnabled then
+            isDisabledByApi = false
+        else
+            CameraCore.Suspend("disabled by hotkey")
         end
     end)
-    registerInput("ifp_freelook", "FreeLook", function(keydown)
-        if isDisabledByApi then
-          return
-        end
 
-        if not ShouldSetCamera(freeLookInCombat) then
-            return
-        end
-        local fpp = Helpers.GetFPP()
-        if fpp == nil then
+    registerInput("ifp_freelook", "FreeLook", function(keydown)
+        if isDisabledByApi or not isLoaded or not isEnabled then
             return
         end
 
         if keydown then
-            -- if we started free look when we haven't finished restoring then just reset it immediately
-            if Helpers.IsRestoringCamera() then
-                -- TODO: test if we need to reset camera
-                -- Helpers.ResetCamera()
-                freeLookRestore.progress = 0
-                Helpers.SetRestoringCamera(false)
-                Helpers.SetFreeObservation(false)
+            local context = buildCameraContext()
+            if context.freeEligible then
+                CameraCore.BeginFreeLook(context)
             end
-
-            lastNativePitch = Helpers.GetPitch()
-            if not Helpers.HasWeapon() then
-                fpp:ResetPitch()
-            end
-            Helpers.SetFreeObservation(true)
-            Helpers.LockMovement()
-            ImmersiveFirstPerson.HandleFreeLook(0, 0)
         else
-            ResetFreeLook()
+            CameraCore.EndFreeLook(false)
         end
     end)
-
 
     registerForEvent("onOverlayOpen", function()
         isOverlayOpen = true
@@ -699,8 +534,8 @@ function ImmersiveFirstPerson.Init()
     end)
 
     return {
-      version = ImmersiveFirstPerson.version,
-      api = API,
+        version = ImmersiveFirstPerson.version,
+        api = API,
     }
 end
 

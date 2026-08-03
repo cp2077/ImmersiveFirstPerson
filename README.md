@@ -1,36 +1,27 @@
-# ImmersiveFirstPerson
-
+# Immersive First Person
 
 ## Features
 
-1. Overall improved first-person view of V's body.
-2. FreeLook: ability to rotate V's head (camera) without moving their body.  
+1. A pitch-aware first-person body view designed to avoid the neck opening and body clipping.
+2. FreeLook for rotating V's view without rotating their body, with mouse and controller input.
 
+Body correction runs while looking down during normal unarmed gameplay. It suspends in vehicles, swimming, takedowns, knockdowns, body carrying, and camera-controlled scenes. FreeLook can optionally remain available while a weapon is equipped.
 
-This mod is adaptive, so you don't have to worry about clipping. The camera will only apply when:  
-1. You're looking down
-2. You're not holding any weapons
-3. You're not in a vehicle
-4. You're not in fixed camera cutscene.
-5. You're not carrying a body
-(let me know if there are other uncovered scenarios)
-
+The mod does not replace `r6/config/settings/platform/pc/options.json` or change saved mouse sensitivity. Native camera input is locked only while the FreeLook input is held and is released immediately on key-up. The optional visual return uses elapsed time and does not hold native input.
 
 ## Installation
 
-1. Make sure you've installed Cyber Engine Tweaks.
-2. Drop the content of an archive into your cyberpunk directory (where the "bin" folder is).
-
+1. Install Cyber Engine Tweaks.
+2. Extract the archive into the Cyberpunk 2077 directory containing the `bin` folder.
 
 ## Shortcuts
-There are two types of hotkeys and they are assigned in two separate menus:
-1. CET Overlay -> Bindings -> **Hotkeys** -> Toggle Enabled
-2. Cet Overlay -> Bindings -> **Inputs** -> FreeLook
 
+Bindings live in two CET Overlay sections:
 
-## Warning
-Due to an internal game bug, some players may experience problems with their character getting stuck.  
-In this case, reload the latest save file and uncheck option "Smooth Transition From FreeLook" or increase transition speed.  
+1. **Hotkeys** → Toggle Enabled
+2. **Inputs** → FreeLook
+
+Camera and FreeLook options are available in the mod's CET Overlay window.
 
 ----
 
