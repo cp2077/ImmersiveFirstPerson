@@ -1402,6 +1402,30 @@ local function composeAndWrite(fpp, context)
         bodyPosition.forward = rotatedBody.forward
         bodyPosition.vertical = rotatedBody.vertical
     end
+    if not context.hasWeapon
+        and (runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING) then
+        -- The normal look-down body curve moves forward as it fades toward level
+        -- view. At a completed shoulder turn that becomes a sideways slide across
+        -- the torso. Hold the side pose against a body-relative rearward reference
+        -- instead, then retract slightly farther as the gaze rises.
+        local sideRiseProgress = smoothstep(
+            (visualEffectivePitch - Vars.FREELOOK.SIDE_FORWARD_HOLD_START_PITCH)
+                / (Vars.FREELOOK.SIDE_FORWARD_HOLD_FULL_PITCH
+                    - Vars.FREELOOK.SIDE_FORWARD_HOLD_START_PITCH)
+        )
+        if sideRiseProgress > 0.0 and freeOffset.sideProgress > 0.0 then
+            local sideReferenceBody = CameraCore.EvaluateBody(
+                Vars.FREELOOK.SIDE_FORWARD_HOLD_START_PITCH,
+                context.crouching,
+                runtime.baseline.fov
+            )
+            local sideTargetForward = sideReferenceBody.forward
+                - Vars.FREELOOK.SIDE_RISE_BACK_OFFSET * sideRiseProgress
+            local sideHold = freeOffset.sideProgress * sideRiseProgress
+            bodyPosition.forward = bodyPosition.forward
+                + (sideTargetForward - bodyPosition.forward) * sideHold
+        end
+    end
 
     local position = {
         x = runtime.baseline.position.x + bodyPosition.lateral + freeOffset.lateral,
