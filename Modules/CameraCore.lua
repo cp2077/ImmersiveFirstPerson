@@ -1301,6 +1301,14 @@ function CameraCore.BeginFreeLook()
             "pitchMin",
             Vars.FREELOOK.DEFAULT_PITCH_FLOOR
         )
+        if runtime.heightPitchFloor.active
+            and finite(runtime.heightPitchFloor.original) then
+            -- The component currently exposes our raised *native* floor. The
+            -- freelook clamp below works in final visible space and performs its
+            -- own inverse height mapping, so seed it with the untouched game
+            -- floor or the experimental bias would be counted twice.
+            componentFloor = runtime.heightPitchFloor.original
+        end
         local componentCeiling = readNumberProperty(
             fpp,
             "pitchMax",
