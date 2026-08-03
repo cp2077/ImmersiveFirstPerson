@@ -901,7 +901,19 @@ local function composeAndWrite(fpp, context)
         return false
     end
     runtime.nativePitch = nativePitch
-    local effectiveNativePitch = nativePitch
+
+    local compositionNativePitch = nativePitch
+    if runtime.heightTransfer.active
+        and runtime.mode ~= MODE.FREELOOK
+        and runtime.mode ~= MODE.RETURNING then
+        -- CET's onUpdate observes the old parent pitch, then REDengine applies
+        -- our temporary pitch bound before rendering the frame. Compose for the
+        -- already-known destination so the new parent rotation is not rendered
+        -- once with a local transform calculated from the previous pitch.
+        compositionNativePitch = runtime.heightTransfer.targetNativePitch
+    end
+
+    local effectiveNativePitch = compositionNativePitch
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
         local floor = runtime.pitchFloor or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
         local ceiling = runtime.pitchCeiling or Vars.FREELOOK.DEFAULT_PITCH_CEILING
@@ -943,7 +955,7 @@ local function composeAndWrite(fpp, context)
         fovDelta = 0.0,
     }
     local bodySpaceMotion = NativeCameraCurve.OffsetToReference(
-        nativePitch,
+        compositionNativePitch,
         effectiveNativePitch,
         runtime.baseline.fov
     )
@@ -960,7 +972,7 @@ local function composeAndWrite(fpp, context)
     local positionRestore = evaluateHeightPositionRestore(visualEffectivePitch)
     bodySpaceMotion.vertical = bodySpaceMotion.vertical
         + (visualPosition.vertical - nativePosition.vertical) * positionRestore
-    local nativeMotion = nativeMotionToCameraLocal(nativePitch, bodySpaceMotion)
+    local nativeMotion = nativeMotionToCameraLocal(compositionNativePitch, bodySpaceMotion)
     local bodyPosition = {
         lateral = body.lateral,
         forward = body.forward,
@@ -997,7 +1009,7 @@ local function composeAndWrite(fpp, context)
         w = runtime.baseline.position.w,
     }
     local orientation = headLocalOrientation(
-        nativePitch,
+        compositionNativePitch,
         runtime.heightPitch + body.pitch,
         runtime.freePitch,
         runtime.freeYaw,
