@@ -954,7 +954,27 @@ local function stepHeadCone(yaw, pitch, yawDelta, pitchDelta, hasWeapon, basePit
     end
 
     local pitchLimit = signedPitchLimit(normalizedPitch, maxPitchDown, maxPitchUp)
-    return normalizedYaw * maxYaw, normalizedPitch * pitchLimit
+    local resultYaw = normalizedYaw * maxYaw
+    local resultPitch = normalizedPitch * pitchLimit
+    if not hasWeapon then
+        -- Looking behind while retaining the full downward native range puts the
+        -- camera through the open neck. Tighten the absolute visible floor only
+        -- after the shoulder turn begins; because the floor itself follows a
+        -- smooth yaw curve, continuing rearward gently guides the gaze upward.
+        local rearProgress = smoothstep(
+            (math.abs(resultYaw) / maxYaw
+                - Vars.FREELOOK.REAR_PITCH_CLAMP_START_YAW_PROGRESS)
+                / (1.0 - Vars.FREELOOK.REAR_PITCH_CLAMP_START_YAW_PROGRESS)
+        )
+        if rearProgress > 0.0 then
+            local nativeFloor = runtime.pitchFloor
+                or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
+            local rearFloor = nativeFloor
+                + (Vars.FREELOOK.REAR_PITCH_FLOOR - nativeFloor) * rearProgress
+            resultPitch = math.max(resultPitch, rearFloor - basePitch)
+        end
+    end
+    return resultYaw, resultPitch
 end
 
 function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
