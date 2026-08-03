@@ -45,9 +45,9 @@ return {
         -- Measured native FPP parent limits on Cyberpunk 2077 2.31.
         DEFAULT_PITCH_FLOOR = -80.0,
         DEFAULT_PITCH_CEILING = 80.0,
-        COMBAT_MAX_YAW = 45.0,
-        COMBAT_MAX_PITCH_DOWN = 25.0,
-        COMBAT_MAX_PITCH_UP = 70.0,
+        COMBAT_MAX_YAW = 50.0,
+        COMBAT_MAX_PITCH_DOWN = 30.0,
+        COMBAT_MAX_PITCH_UP = 80.0,
 
         MAX_LATERAL_OFFSET = 0.230,
         MAX_BACK_OFFSET = 0.025,
