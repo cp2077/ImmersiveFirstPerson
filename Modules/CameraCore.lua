@@ -965,6 +965,10 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     local sideCorrectionProgress = smoothstep(
         absoluteYawProgress / free.SIDE_CORRECTION_FULL_YAW_PROGRESS
     )
+    local backProgress = smoothstep(
+        (absoluteYawProgress - free.SIDE_CORRECTION_FULL_YAW_PROGRESS)
+            / (1.0 - free.SIDE_CORRECTION_FULL_YAW_PROGRESS)
+    )
 
     -- Do not add a hard yaw deadzone: a shallow power curve delays the visible
     -- rotation but remains responsive and still reaches the full cone boundary.
@@ -999,6 +1003,7 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
         yaw = visibleYaw,
         pitch = pitchNormalization + upwardBias,
         sideProgress = sideCorrectionProgress,
+        backProgress = backProgress,
         lateral = lateral,
         -- Native look-down travels forward. Ease a small amount of that movement
         -- back out during a side turn to keep the neck seam behind the camera.
@@ -1239,6 +1244,7 @@ local function composeAndWrite(fpp, context)
         yaw = 0.0,
         pitch = 0.0,
         sideProgress = 0.0,
+        backProgress = 0.0,
         lateral = 0.0,
         forward = 0.0,
         vertical = 0.0,
@@ -1281,6 +1287,13 @@ local function composeAndWrite(fpp, context)
         local motionScale = 1.0
             - Vars.FREELOOK.SIDE_NATIVE_MOTION_REDUCTION
                 * freeOffset.sideProgress
+        -- The side pose retains a neck-safe fraction of native motion. Past 90
+        -- degrees that same fraction separates the camera from the back, so fade
+        -- it progressively to zero as the rear yaw clamp is approached.
+        motionScale = motionScale
+            * (1.0
+                - Vars.FREELOOK.BACK_NATIVE_MOTION_REDUCTION
+                    * freeOffset.backProgress)
 
         if effectiveNativePitch > compositionNativePitch then
             -- The native curve was measured with the camera facing forward.
