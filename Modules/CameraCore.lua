@@ -1016,12 +1016,12 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     local downwardProgress = composedPitch < 0.0
         and smoothstep(-composedPitch / maxPitchDown)
         or 0.0
-    -- The extra shoulder clearance is useful near level view, but the same
-    -- distance while looking at the torso places the camera in the outer corner
-    -- of the body. Pull that pose inward laterally and rearward toward the spine.
+    -- Looking down needs extra shoulder clearance to keep the neck seam behind
+    -- the camera. Rear yaw stops lateral travel separately, so this boost cannot
+    -- keep pushing the view into the detached outer-corner pose.
     local downwardSideProgress = downwardProgress * sideCorrectionProgress
     local lateralScale = hasWeapon and 1.0
-        or 1.0 - free.DOWNWARD_LATERAL_REDUCTION * downwardSideProgress
+        or 1.0 + free.DOWNWARD_LATERAL_BOOST * downwardSideProgress
     local lateral = lateralMax * lateralProgress * lateralScale * sideSign
     -- This setback belongs to the established shoulder pose, not to downward
     -- pitch. If it faded while the head looked upward at the side, the camera
