@@ -39,12 +39,12 @@ local function blockingThirdPartyMods()
     return false
 end
 
-local function commonCameraContextAllowed(sceneTier)
+local function commonCameraContextAllowed(sceneTier, isTakingDown)
     return sceneTier > 0
         and sceneTier < 3
         and not Helpers.IsInVehicle()
         and not Helpers.IsSwimming()
-        and Helpers.IsTakingDown() <= 0
+        and not isTakingDown
         and not Helpers.IsCarryingBody()
         and not Helpers.IsKnockedDown()
         and not blockingThirdPartyMods()
@@ -76,12 +76,14 @@ end
 local function buildCameraContext(delta)
     local sceneTier = Helpers.GetSceneTier()
     local hasWeapon = Helpers.HasWeapon()
+    local isTakingDown = Helpers.IsTakingDown() > 0
     -- The attachment slot can disappear while the ranged-weapon state machine
     -- still owns the arms/camera. Treat either signal as armed, then keep a short
     -- clear grace for the frame gap at the end of those animations.
     local reportsArmed = hasWeapon or Helpers.GetWeaponState() ~= 0
     local blocksHeightForWeapon = updateHeightWeaponBlock(reportsArmed, delta)
-    local commonEligible = isEnabled and commonCameraContextAllowed(sceneTier)
+    local commonEligible = isEnabled
+        and commonCameraContextAllowed(sceneTier, isTakingDown)
     -- Height has narrower incompatibilities than the body/freelook camera. Base
     -- locomotion keeps the same FPP parent through jumps, falls, hard landings,
     -- knockdowns, climbing, and vaulting, so retaining the correction is safer
@@ -89,15 +91,18 @@ local function buildCameraContext(delta)
     local heightCameraCompatible = isEnabled
         and sceneTier == 1
         and not Helpers.IsInVehicle()
-        and Helpers.IsTakingDown() <= 0
         and not Helpers.IsCarryingBody()
         and not blockingThirdPartyMods()
+    -- A takedown remains "compatible" only long enough to transfer the hidden
+    -- pitch back while holding the visible view; actual height composition is
+    -- disabled before the authored takedown camera takes ownership.
     -- Keep height disabled for the complete swimming high-level state. The
     -- hidden native pitch bias can affect REDengine's pitch-driven dive rules.
     -- Ladders are also excluded: their Enter/Default/Reset/Exit profiles replace
     -- pitchMin with a centred floor, and adding height bias to that floor forces
     -- the camera upward. Vault and non-ladder climb states remain supported.
     local heightContextEligible = heightCameraCompatible
+        and not isTakingDown
         and not Helpers.IsSwimming()
         and not Helpers.IsOnLadder()
         and (not Helpers.IsInWorkspot() or Helpers.IsTraversalLocomotion())
