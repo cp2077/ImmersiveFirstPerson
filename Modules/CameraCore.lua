@@ -30,6 +30,11 @@ local runtime = {
     bodyProgress = 0,
     bodyPitch = 0,
     heightPitch = 0,
+    heightInput = {
+        baseSensitivityY = nil,
+        appliedSensitivityY = nil,
+        compensation = 1.0,
+    },
     freeYaw = 0,
     freePitch = 0,
     rawYaw = 0,
@@ -308,6 +313,19 @@ local function readNumberProperty(object, property, fallback)
     return fallback
 end
 
+local function restoreHeightSensitivity(fpp)
+    local heightInput = runtime.heightInput
+    if fpp and finite(heightInput.baseSensitivityY) then
+        pcall(function()
+            fpp.sensitivityMultY = heightInput.baseSensitivityY
+        end)
+    end
+
+    heightInput.baseSensitivityY = nil
+    heightInput.appliedSensitivityY = nil
+    heightInput.compensation = 1.0
+end
+
 local function lockNativeInput()
     if runtime.lock.active then
         return
@@ -355,6 +373,7 @@ local function captureBaseline(fpp)
 end
 
 local function releaseCamera(fpp)
+    restoreHeightSensitivity(fpp)
     if not runtime.ownsCamera or not runtime.baseline then
         runtime.ownsCamera = false
         runtime.baseline = nil
@@ -389,21 +408,71 @@ local function smoothstep(t)
     return t * t * (3.0 - 2.0 * t)
 end
 
-function CameraCore.EvaluateHeightPitch(nativePitch, maximumBias)
-    maximumBias = clamp(tonumber(maximumBias) or 0.0, 0.0, 20.0)
-    if maximumBias <= 0.0 then
+local function smoothstepDerivative(t)
+    if t <= 0.0 or t >= 1.0 then
         return 0.0
     end
+    return 6.0 * t * (1.0 - t)
+end
 
-    local downActivation = smoothstep(
-        (nativePitch - HEIGHT_BIAS_DOWN_OFF)
-            / (HEIGHT_BIAS_DOWN_FULL - HEIGHT_BIAS_DOWN_OFF)
-    )
-    local upActivation = 1.0 - smoothstep(
-        (nativePitch - HEIGHT_BIAS_UP_FULL)
-            / (HEIGHT_BIAS_UP_OFF - HEIGHT_BIAS_UP_FULL)
-    )
-    return -maximumBias * downActivation * upActivation
+local function evaluateHeightPitchAndResponse(nativePitch, maximumBias)
+    maximumBias = clamp(tonumber(maximumBias) or 0.0, 0.0, 20.0)
+    if maximumBias <= 0.0 then
+        return 0.0, 1.0
+    end
+
+    local downRange = HEIGHT_BIAS_DOWN_FULL - HEIGHT_BIAS_DOWN_OFF
+    local downT = (nativePitch - HEIGHT_BIAS_DOWN_OFF) / downRange
+    local downActivation = smoothstep(downT)
+    local downSlope = smoothstepDerivative(downT) / downRange
+
+    local upRange = HEIGHT_BIAS_UP_OFF - HEIGHT_BIAS_UP_FULL
+    local upT = (nativePitch - HEIGHT_BIAS_UP_FULL) / upRange
+    local upActivation = 1.0 - smoothstep(upT)
+    local upSlope = -smoothstepDerivative(upT) / upRange
+
+    local pitch = -maximumBias * downActivation * upActivation
+    local pitchSlope = -maximumBias
+        * (downSlope * upActivation + downActivation * upSlope)
+
+    -- `1 + pitchSlope` is how much visible pitch results from one degree of
+    -- native pitch. During the downward fade this falls below one, which is the
+    -- otherwise unavoidable "mouse fighting" caused by two rotations cancelling.
+    return pitch, math.max(0.1, 1.0 + pitchSlope)
+end
+
+function CameraCore.EvaluateHeightPitch(nativePitch, maximumBias)
+    local pitch = evaluateHeightPitchAndResponse(nativePitch, maximumBias)
+    return pitch
+end
+
+local function updateHeightSensitivity(fpp, nativePitch, maximumBias)
+    local _, visibleResponse = evaluateHeightPitchAndResponse(nativePitch, maximumBias)
+    local compensation = clamp(1.0 / visibleResponse, 0.25, 4.0)
+    local heightInput = runtime.heightInput
+    local current = readNumberProperty(fpp, "sensitivityMultY", nil)
+    if not finite(current) then
+        restoreHeightSensitivity(fpp)
+        return
+    end
+
+    if not finite(heightInput.baseSensitivityY) then
+        heightInput.baseSensitivityY = current
+    elseif finite(heightInput.appliedSensitivityY)
+        and math.abs(current - heightInput.appliedSensitivityY) > 0.0001 then
+        -- Camera contexts can replace the multiplier while we own the component.
+        -- Treat that value as the new base instead of restoring stale aim settings.
+        heightInput.baseSensitivityY = current
+    end
+
+    local desired = heightInput.baseSensitivityY * compensation
+    local applied = pcall(function()
+        fpp.sensitivityMultY = desired
+    end)
+    if applied then
+        heightInput.appliedSensitivityY = desired
+        heightInput.compensation = compensation
+    end
 end
 
 local function normalizeBodyPitch(nativePitch)
@@ -608,7 +677,7 @@ local function inputAxis(value)
     return value < 0 and -normalized or normalized
 end
 
-local function applyFreeLookInput(delta, fpp, hasWeapon, basePitch)
+local function applyFreeLookInput(delta, fpp, hasWeapon, basePitch, maximumHeightBias)
     local free = Vars.FREELOOK
     local sensitivity = Config.inner.freeLookSensitivity / free.DEFAULT_SENSITIVITY
     local zoom = readNumberProperty(fpp, "zoom", 1.0)
@@ -627,6 +696,14 @@ local function applyFreeLookInput(delta, fpp, hasWeapon, basePitch)
         - inputAxis(runtime.input.stickX) * invertX * controllerScale
     pitchDelta = pitchDelta
         + inputAxis(runtime.input.stickY) * invertY * controllerScale
+
+    -- Freelook owns its pitch scalar, so compensate the remap directly instead
+    -- of changing the component multiplier used by native mouse/controller look.
+    local _, visibleResponse = evaluateHeightPitchAndResponse(
+        basePitch + runtime.freePitch,
+        maximumHeightBias
+    )
+    pitchDelta = pitchDelta / visibleResponse
 
     runtime.freeYaw, runtime.freePitch = stepHeadCone(
         runtime.freeYaw,
@@ -717,6 +794,16 @@ local function composeAndWrite(fpp, context)
             ceiling - nativePitch
         )
         effectiveNativePitch = nativePitch + runtime.freePitch
+    end
+
+    if runtime.mode == MODE.FREELOOK then
+        -- Native input is consumed in freelook; its custom pitch step is
+        -- compensated in applyFreeLookInput() instead.
+        restoreHeightSensitivity(fpp)
+    elseif context.heightEligible then
+        updateHeightSensitivity(fpp, effectiveNativePitch, context.heightPitch)
+    else
+        restoreHeightSensitivity(fpp)
     end
 
     -- During freelook the real parent is frozen, so drive the height fade from
@@ -860,6 +947,7 @@ function CameraCore.BeginFreeLook()
     if not fpp or not captureBaseline(fpp) then
         return false
     end
+    restoreHeightSensitivity(fpp)
 
     if runtime.mode ~= MODE.RETURNING then
         runtime.freeYaw = 0
@@ -998,7 +1086,8 @@ function CameraCore.Update(delta, context)
                 inputDelta,
                 fpp,
                 context.hasWeapon,
-                runtime.nativePitch
+                runtime.nativePitch,
+                context.heightPitch
             )
         else
             updateReturn(elapsedDelta)
