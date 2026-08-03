@@ -1506,6 +1506,18 @@ function CameraCore.BeginFreeLook(context)
         end
     end
 
+    if runtime.heightPitchFloor.active then
+        -- The experimental height feature normally raises pitchMin to keep the
+        -- native camera out of the neck. Leaving REDengine parked directly on
+        -- that artificial bound during freelook causes hidden positional clamp
+        -- corrections even when its recovered pitch barely changes. Freelook
+        -- owns the visible clamp itself, so use the original component range
+        -- until normal camera composition resumes after the return.
+        if not restoreHeightPitchFloor(fpp) then
+            Helpers.Log("freelook could not suspend experimental native pitch floor")
+        end
+    end
+
     if runtime.mode ~= MODE.RETURNING then
         runtime.freeYaw = 0
         runtime.freePitch = 0
