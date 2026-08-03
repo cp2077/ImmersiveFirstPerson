@@ -53,12 +53,15 @@ end
 local function buildCameraContext()
     local hasWeapon = Helpers.HasWeapon()
     local commonEligible = isEnabled and commonCameraContextAllowed()
-    local heightEligible = commonEligible and experimentalHeight.enabled
+    local heightEligible = commonEligible and experimentalHeight.enabled and not hasWeapon
     return {
         bodyEligible = commonEligible and not hasWeapon,
         freeEligible = commonEligible and (not hasWeapon or Config.inner.freeLookInCombat),
         heightEligible = heightEligible,
-        heightPitch = heightEligible and experimentalHeight.pitchBias or 0,
+        heightCanTransfer = commonEligible,
+        -- Keep the requested bias available while ineligible so CameraCore can
+        -- transfer it into/out of native pitch during weapon transitions.
+        heightPitch = experimentalHeight.pitchBias,
         crouching = Helpers.IsCrouching(),
         hasWeapon = hasWeapon,
     }

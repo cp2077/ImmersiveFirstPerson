@@ -20,6 +20,8 @@ local HEIGHT_POSITION_RESTORE_FULL = -40.0
 local HEIGHT_POSITION_RESTORE_OFF = 0.0
 local HEIGHT_BIAS_UP_FULL = 40.0
 local HEIGHT_BIAS_UP_OFF = 80.0
+local HEIGHT_TRANSFER_TIMEOUT = 0.30
+local HEIGHT_TRANSFER_TOLERANCE = 0.15
 
 local runtime = {
     mode = MODE.SUSPENDED,
@@ -30,6 +32,17 @@ local runtime = {
     bodyProgress = 0,
     bodyPitch = 0,
     heightPitch = 0,
+    heightApplied = nil,
+    heightTransfer = {
+        active = false,
+        targetApplied = false,
+        targetNativePitch = 0.0,
+        heldVisualPitch = 0.0,
+        originalPitchMin = nil,
+        originalPitchMax = nil,
+        elapsed = 0.0,
+        failedDesired = nil,
+    },
     freeYaw = 0,
     freePitch = 0,
     rawYaw = 0,
@@ -425,6 +438,167 @@ local function nativePitchForVisualPitch(visualPitch, maximumBias)
     return (lower + upper) * 0.5
 end
 
+local function restoreHeightTransferLimits(fpp)
+    local transfer = runtime.heightTransfer
+    if fpp then
+        if finite(transfer.originalPitchMin) then
+            pcall(function()
+                fpp.pitchMin = transfer.originalPitchMin
+            end)
+        end
+        if finite(transfer.originalPitchMax) then
+            pcall(function()
+                fpp.pitchMax = transfer.originalPitchMax
+            end)
+        end
+    end
+    transfer.originalPitchMin = nil
+    transfer.originalPitchMax = nil
+end
+
+local function abortHeightTransfer(fpp, reason, rememberFailure)
+    local transfer = runtime.heightTransfer
+    if not transfer.active then
+        return
+    end
+
+    restoreHeightTransferLimits(fpp)
+    if rememberFailure then
+        transfer.failedDesired = transfer.targetApplied
+    end
+    transfer.active = false
+    transfer.elapsed = 0.0
+    Helpers.Log("native pitch handoff aborted: " .. tostring(reason))
+end
+
+local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias)
+    local transfer = runtime.heightTransfer
+    local originalPitchMin = readNumberProperty(
+        fpp,
+        "pitchMin",
+        Vars.FREELOOK.DEFAULT_PITCH_FLOOR
+    )
+    local originalPitchMax = readNumberProperty(
+        fpp,
+        "pitchMax",
+        Vars.FREELOOK.DEFAULT_PITCH_CEILING
+    )
+    if originalPitchMin >= originalPitchMax then
+        return false, "invalid native pitch limits"
+    end
+
+    local currentHeightPitch = runtime.heightApplied
+        and CameraCore.EvaluateHeightPitch(nativePitch, maximumBias)
+        or 0.0
+    local heldVisualPitch = nativePitch + currentHeightPitch
+    local targetNativePitch = desiredApplied
+        and nativePitchForVisualPitch(heldVisualPitch, maximumBias)
+        or heldVisualPitch
+
+    -- At an absolute pole there may be no native range into which the local
+    -- correction can be transferred. Refuse the handoff instead of completing
+    -- it with a residual visible jump.
+    if targetNativePitch < originalPitchMin + HEIGHT_TRANSFER_TOLERANCE
+        or targetNativePitch > originalPitchMax - HEIGHT_TRANSFER_TOLERANCE then
+        return false, "target lies outside native pitch range"
+    end
+
+    if math.abs(targetNativePitch - nativePitch) <= HEIGHT_TRANSFER_TOLERANCE then
+        runtime.heightApplied = desiredApplied
+        transfer.failedDesired = nil
+        return true
+    end
+
+    transfer.active = true
+    transfer.targetApplied = desiredApplied
+    transfer.targetNativePitch = targetNativePitch
+    transfer.heldVisualPitch = heldVisualPitch
+    transfer.originalPitchMin = originalPitchMin
+    transfer.originalPitchMax = originalPitchMax
+    transfer.elapsed = 0.0
+
+    local property = targetNativePitch < nativePitch and "pitchMax" or "pitchMin"
+    local wrote = pcall(function()
+        fpp[property] = targetNativePitch
+    end)
+    local readback = readNumberProperty(fpp, property, nil)
+    if not wrote or not finite(readback)
+        or math.abs(readback - targetNativePitch) > 0.01 then
+        restoreHeightTransferLimits(fpp)
+        transfer.active = false
+        return false, property .. " rejected the temporary limit"
+    end
+
+    Helpers.Log((
+        "native pitch handoff started: %.2f -> %.2f via %s"
+    ):format(nativePitch, targetNativePitch, property))
+    return true
+end
+
+local function updateHeightTransfer(fpp, nativePitch, context, delta)
+    local transfer = runtime.heightTransfer
+    local desiredApplied = context.heightEligible == true
+
+    if runtime.heightApplied == nil then
+        runtime.heightApplied = desiredApplied
+        transfer.failedDesired = nil
+        return
+    end
+
+    if transfer.failedDesired ~= nil and transfer.failedDesired ~= desiredApplied then
+        transfer.failedDesired = nil
+    end
+
+    if transfer.active then
+        if desiredApplied ~= transfer.targetApplied then
+            abortHeightTransfer(fpp, "desired state changed", false)
+        else
+            transfer.elapsed = transfer.elapsed + math.max(tonumber(delta) or 0.0, 0.0)
+            if math.abs(nativePitch - transfer.targetNativePitch)
+                <= HEIGHT_TRANSFER_TOLERANCE then
+                restoreHeightTransferLimits(fpp)
+                transfer.active = false
+                transfer.elapsed = 0.0
+                runtime.heightApplied = transfer.targetApplied
+                transfer.failedDesired = nil
+                Helpers.Log((
+                    "native pitch handoff completed at %.2f"
+                ):format(nativePitch))
+                return
+            elseif transfer.elapsed >= HEIGHT_TRANSFER_TIMEOUT then
+                abortHeightTransfer(fpp, "native camera did not reach temporary limit", true)
+                return
+            end
+        end
+    end
+
+    if not transfer.active
+        and desiredApplied ~= runtime.heightApplied
+        and transfer.failedDesired ~= desiredApplied then
+        local started, reason = beginHeightTransfer(
+            fpp,
+            nativePitch,
+            desiredApplied,
+            context.heightPitch
+        )
+        if not started then
+            transfer.failedDesired = desiredApplied
+            Helpers.Log("native pitch handoff unavailable: " .. tostring(reason))
+        end
+    end
+end
+
+local function evaluateAppliedHeightPitch(nativePitch, context)
+    local transfer = runtime.heightTransfer
+    if transfer.active then
+        return transfer.heldVisualPitch - nativePitch
+    end
+    if runtime.heightApplied then
+        return CameraCore.EvaluateHeightPitch(nativePitch, context.heightPitch)
+    end
+    return 0.0
+end
+
 local function normalizeBodyPitch(nativePitch)
     local body = Vars.BODY
     local pitchDown = -nativePitch
@@ -731,8 +905,9 @@ local function composeAndWrite(fpp, context)
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
         local floor = runtime.pitchFloor or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
         local ceiling = runtime.pitchCeiling or Vars.FREELOOK.DEFAULT_PITCH_CEILING
-        local effectiveFloor = nativePitchForVisualPitch(floor, context.heightPitch)
-        local effectiveCeiling = nativePitchForVisualPitch(ceiling, context.heightPitch)
+        local appliedHeightBias = runtime.heightApplied and context.heightPitch or 0.0
+        local effectiveFloor = nativePitchForVisualPitch(floor, appliedHeightBias)
+        local effectiveCeiling = nativePitchForVisualPitch(ceiling, appliedHeightBias)
         -- `freePitch` emulates native parent pitch, but the limits belong to the
         -- final visible camera. Invert the experimental pitch mapping so its
         -- constant downward bias cannot extend freelook below the native floor.
@@ -746,10 +921,7 @@ local function composeAndWrite(fpp, context)
 
     -- During freelook the real parent is frozen, so drive the height adjustment
     -- from the emulated native pitch as well.
-    runtime.heightPitch = CameraCore.EvaluateHeightPitch(
-        effectiveNativePitch,
-        context.heightPitch
-    )
+    runtime.heightPitch = evaluateAppliedHeightPitch(effectiveNativePitch, context)
     local visualEffectivePitch = effectiveNativePitch + runtime.heightPitch
     local bodyDriverPitch = visualEffectivePitch
     local body = CameraCore.EvaluateBody(
@@ -994,6 +1166,8 @@ end
 function CameraCore.Update(delta, context)
     local fpp = Helpers.GetFPP()
     if not fpp then
+        abortHeightTransfer(nil, "FPP camera unavailable", false)
+        runtime.heightApplied = nil
         clearInput()
         runtime.freeYaw = 0
         runtime.freePitch = 0
@@ -1027,7 +1201,7 @@ function CameraCore.Update(delta, context)
                 fpp,
                 context.hasWeapon,
                 runtime.nativePitch,
-                context.heightPitch
+                runtime.heightApplied and context.heightPitch or 0.0
             )
         else
             updateReturn(elapsedDelta)
@@ -1036,7 +1210,22 @@ function CameraCore.Update(delta, context)
         return
     end
 
-    if not context.bodyEligible and not context.heightEligible then
+    if not context.bodyEligible and not context.heightCanTransfer then
+        abortHeightTransfer(fpp, "camera context invalid", false)
+        runtime.heightApplied = nil
+        releaseCamera(fpp)
+        setMode(MODE.SUSPENDED, "camera context invalid")
+        return
+    end
+
+    if runtime.heightApplied == nil and not context.heightEligible then
+        runtime.heightApplied = false
+    end
+
+    local heightManaged = context.heightEligible
+        or runtime.heightApplied == true
+        or runtime.heightTransfer.active
+    if not context.bodyEligible and not heightManaged then
         releaseCamera(fpp)
         setMode(MODE.SUSPENDED, "camera context invalid")
         return
@@ -1049,13 +1238,17 @@ function CameraCore.Update(delta, context)
     end
 
     runtime.nativePitch = nativePitch
-    runtime.heightPitch = CameraCore.EvaluateHeightPitch(nativePitch, context.heightPitch)
+    updateHeightTransfer(fpp, nativePitch, context, elapsedDelta)
+    runtime.heightPitch = evaluateAppliedHeightPitch(nativePitch, context)
     local visualPitch = nativePitch + runtime.heightPitch
     runtime.bodyProgress = normalizeBodyPitch(visualPitch)
     -- While the experiment is enabled, retain one baseline even where the bias
     -- reaches zero. Releasing and recapturing around that boundary causes visible
     -- one-frame transform chatter as native pitch fluctuates across the threshold.
-    if runtime.bodyProgress <= 0.0001 and not context.heightEligible then
+    heightManaged = context.heightEligible
+        or runtime.heightApplied == true
+        or runtime.heightTransfer.active
+    if runtime.bodyProgress <= 0.0001 and not heightManaged then
         releaseCamera(fpp)
         setMode(MODE.NATIVE, "camera corrections inactive")
         return
@@ -1077,6 +1270,8 @@ end
 
 function CameraCore.Suspend(reason)
     local fpp = Helpers.GetFPP()
+    abortHeightTransfer(fpp, reason or "suspended", false)
+    runtime.heightApplied = nil
     clearInput()
     runtime.freeYaw = 0
     runtime.freePitch = 0
@@ -1124,6 +1319,9 @@ function CameraCore.GetDebugState()
         bodyProgress = runtime.bodyProgress,
         bodyPitch = runtime.bodyPitch,
         heightPitch = runtime.heightPitch,
+        heightApplied = runtime.heightApplied,
+        heightTransferActive = runtime.heightTransfer.active,
+        heightTransferTarget = runtime.heightTransfer.targetNativePitch,
         freeYaw = runtime.freeYaw,
         freePitch = runtime.freePitch,
         rawYaw = runtime.rawYaw,
