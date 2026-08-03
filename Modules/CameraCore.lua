@@ -426,7 +426,9 @@ local function releaseCamera(fpp)
                 toVector(runtime.baseline.position),
                 toQuaternion(runtime.baseline.orientation)
             )
-            fpp:SetFOV(runtime.baseline.fov)
+            if not Config.inner.dontChangeFov then
+                fpp:SetFOV(runtime.baseline.fov)
+            end
         end)
     end
 
@@ -1351,6 +1353,13 @@ local function composeAndWrite(fpp, context)
     local actualOrientation = fpp:GetLocalOrientation()
     if not actualPosition or not actualOrientation then
         return false
+    end
+    if Config.inner.dontChangeFov then
+        -- The game and its settings remain the sole FOV owner in this mode.
+        -- Refresh the value used by positional curves too: retaining the FOV
+        -- captured at camera entry made later settings changes stale even after
+        -- we stopped writing FOV ourselves.
+        runtime.baseline.fov = Helpers.GetFOV(fpp) or runtime.baseline.fov
     end
     detectCompetingWriter(actualPosition, actualOrientation)
 
