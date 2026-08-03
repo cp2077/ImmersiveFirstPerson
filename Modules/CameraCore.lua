@@ -61,6 +61,7 @@ local runtime = {
     pitchFloor = nil,
     pitchCeiling = nil,
     entryNativePitch = 0.0,
+    entryNativeOrientation = nil,
     returnElapsed = 0,
     returnDuration = 0,
     returnFromYaw = 0,
@@ -96,6 +97,7 @@ local runtime = {
     interferenceFrames = 0,
     interferenceLogged = false,
     freeLookParentDriftLogged = false,
+    freeLookParentOrientationDriftLogged = false,
     freeLookLocalWriterLogged = false,
 }
 
@@ -290,15 +292,25 @@ local function quaternionForward(value)
     return GetSingleton("Quaternion"):GetForward(value)
 end
 
-local function getNativePitch(fpp, actualLocalOrientation)
-    local ok, pitch = pcall(function()
+local function getNativeOrientation(fpp, actualLocalOrientation)
+    local ok, orientation = pcall(function()
         local worldMatrix = fpp:GetLocalToWorld()
         if not worldMatrix then
             return nil
         end
 
         local worldOrientation = matrixToQuaternion(worldMatrix)
-        local nativeOrientation = quaternionMulInverse(worldOrientation, actualLocalOrientation)
+        return quaternionMulInverse(worldOrientation, actualLocalOrientation)
+    end)
+
+    if ok and orientation then
+        return orientation
+    end
+    return nil
+end
+
+local function nativePitchFromOrientation(nativeOrientation)
+    local ok, pitch = pcall(function()
         local forward = quaternionForward(nativeOrientation)
         if not forward or not finite(forward.z) then
             return nil
@@ -322,6 +334,11 @@ local function getNativePitch(fpp, actualLocalOrientation)
         return pitch
     end
     return nil
+end
+
+local function getNativePitch(fpp, actualLocalOrientation)
+    local nativeOrientation = getNativeOrientation(fpp, actualLocalOrientation)
+    return nativeOrientation and nativePitchFromOrientation(nativeOrientation) or nil
 end
 
 local function readNumberProperty(object, property, fallback)
@@ -1102,6 +1119,10 @@ local function updateReturn(delta)
         runtime.freePitch = 0
         runtime.rawYaw = 0
         runtime.rawPitch = 0
+        runtime.pitchFloor = nil
+        runtime.pitchCeiling = nil
+        runtime.entryNativePitch = 0.0
+        runtime.entryNativeOrientation = nil
         setMode(MODE.BODY, "freelook return complete")
         unlockNativeInput(Helpers.GetFPP())
     end
@@ -1159,7 +1180,10 @@ local function composeAndWrite(fpp, context)
     end
     detectCompetingWriter(actualPosition, actualOrientation)
 
-    local nativePitch = getNativePitch(fpp, actualOrientation)
+    local nativeOrientation = getNativeOrientation(fpp, actualOrientation)
+    local nativePitch = nativeOrientation
+        and nativePitchFromOrientation(nativeOrientation)
+        or nil
     if not nativePitch then
         return false
     end
@@ -1176,6 +1200,21 @@ local function composeAndWrite(fpp, context)
             nativePitch,
             nativePitch - runtime.entryNativePitch
         ))
+    end
+    if runtime.mode == MODE.FREELOOK
+        and runtime.entryNativeOrientation
+        and not runtime.freeLookParentOrientationDriftLogged then
+        local parentDot = clamp(math.abs(quaternionDot(
+            nativeOrientation,
+            runtime.entryNativeOrientation
+        )), 0.0, 1.0)
+        local parentAngle = math.deg(2.0 * math.acos(parentDot))
+        if parentAngle > 0.25 then
+            runtime.freeLookParentOrientationDriftLogged = true
+            Helpers.Log((
+                "freelook native parent orientation moved by %.2f degrees; compensating"
+            ):format(parentAngle))
+        end
     end
 
     local compositionNativePitch = nativePitch
@@ -1356,14 +1395,33 @@ local function composeAndWrite(fpp, context)
             + nativeMotion.vertical,
         w = runtime.baseline.position.w,
     }
+    local orientationNativePitch = compositionNativePitch
+    if runtime.mode == MODE.FREELOOK and runtime.entryNativeOrientation then
+        orientationNativePitch = runtime.entryNativePitch
+    end
     local orientation = headLocalOrientation(
-        compositionNativePitch,
+        orientationNativePitch,
         runtime.heightPitch + body.pitch + freeOffset.pitch,
-        effectiveNativePitch - compositionNativePitch,
+        effectiveNativePitch - orientationNativePitch,
         freeOffset.yaw,
         freeOffset.roll,
         runtime.baseline.orientation
     )
+    if runtime.mode == MODE.FREELOOK and runtime.entryNativeOrientation then
+        -- Input consumption normally freezes the parent camera, but REDengine
+        -- can recenter its yaw/roll without touching our local transform or the
+        -- pitch value we previously monitored. Author the head pose under the
+        -- entry parent, then convert it back into the live parent's local space.
+        -- This keeps a held freelook pose continuous through those engine moves.
+        local targetWorldOrientation = quaternionMultiply(
+            toQuaternion(runtime.entryNativeOrientation),
+            orientation
+        )
+        orientation = quaternionMultiply(
+            quaternionConjugate(nativeOrientation),
+            targetWorldOrientation
+        )
+    end
 
     local ok = pcall(function()
         fpp:SetLocalTransform(toVector(position), orientation)
@@ -1454,11 +1512,15 @@ function CameraCore.BeginFreeLook(context)
         runtime.rawYaw = 0
         runtime.rawPitch = 0
         local actualOrientation = fpp:GetLocalOrientation()
-        local entryNativePitch = actualOrientation
-            and getNativePitch(fpp, actualOrientation)
+        local entryNativeOrientation = actualOrientation
+            and getNativeOrientation(fpp, actualOrientation)
+            or nil
+        local entryNativePitch = entryNativeOrientation
+            and nativePitchFromOrientation(entryNativeOrientation)
             or runtime.nativePitch
         runtime.nativePitch = entryNativePitch
         runtime.entryNativePitch = entryNativePitch
+        runtime.entryNativeOrientation = entryNativeOrientation
         local componentFloor = readNumberProperty(
             fpp,
             "pitchMin",
@@ -1490,11 +1552,15 @@ function CameraCore.BeginFreeLook(context)
         -- unlocked. If freelook is pressed again mid-return, freeze that current
         -- parent as the new virtual base so the mode change remains continuous.
         local actualOrientation = fpp:GetLocalOrientation()
-        local resumedNativePitch = actualOrientation
-            and getNativePitch(fpp, actualOrientation)
+        local resumedNativeOrientation = actualOrientation
+            and getNativeOrientation(fpp, actualOrientation)
+            or nil
+        local resumedNativePitch = resumedNativeOrientation
+            and nativePitchFromOrientation(resumedNativeOrientation)
             or runtime.nativePitch
         runtime.nativePitch = resumedNativePitch
         runtime.entryNativePitch = resumedNativePitch
+        runtime.entryNativeOrientation = resumedNativeOrientation
         runtime.rawYaw = runtime.freeYaw
         runtime.rawPitch = runtime.freePitch
     end
@@ -1507,6 +1573,7 @@ function CameraCore.BeginFreeLook(context)
     runtime.inputSeen.stickY = false
     clearInputStats()
     runtime.freeLookParentDriftLogged = false
+    runtime.freeLookParentOrientationDriftLogged = false
     runtime.freeLookLocalWriterLogged = false
     lockNativeInput(fpp)
     setMode(MODE.FREELOOK, "input pressed")
@@ -1567,6 +1634,7 @@ function CameraCore.EndFreeLook(fast)
         runtime.pitchFloor = nil
         runtime.pitchCeiling = nil
         runtime.entryNativePitch = 0.0
+        runtime.entryNativeOrientation = nil
         setMode(MODE.BODY, "freelook ended")
         return
     end
@@ -1601,6 +1669,7 @@ function CameraCore.Update(delta, context)
         runtime.pitchFloor = nil
         runtime.pitchCeiling = nil
         runtime.entryNativePitch = 0.0
+        runtime.entryNativeOrientation = nil
         runtime.ownsCamera = false
         runtime.baseline = nil
         runtime.lastApplied = nil
@@ -1726,6 +1795,7 @@ function CameraCore.Suspend(reason)
     runtime.pitchFloor = nil
     runtime.pitchCeiling = nil
     runtime.entryNativePitch = 0.0
+    runtime.entryNativeOrientation = nil
     runtime.returnElapsed = 0
     unlockNativeInput(fpp)
     releaseCamera(fpp)
@@ -1762,6 +1832,7 @@ function CameraCore.Pause(reason)
     runtime.pitchFloor = nil
     runtime.pitchCeiling = nil
     runtime.entryNativePitch = 0.0
+    runtime.entryNativeOrientation = nil
     runtime.returnElapsed = 0
     unlockNativeInput(fpp)
 
