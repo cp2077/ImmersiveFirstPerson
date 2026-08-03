@@ -95,6 +95,8 @@ local runtime = {
     },
     interferenceFrames = 0,
     interferenceLogged = false,
+    freeLookParentDriftLogged = false,
+    freeLookLocalWriterLogged = false,
 }
 
 local function clamp(value, minimum, maximum)
@@ -1056,7 +1058,7 @@ local function quaternionDot(a, b)
 end
 
 local function detectCompetingWriter(actualPosition, actualOrientation)
-    if not runtime.lastApplied or runtime.interferenceLogged then
+    if not runtime.lastApplied then
         return
     end
 
@@ -1064,8 +1066,22 @@ local function detectCompetingWriter(actualPosition, actualOrientation)
         + math.abs(actualPosition.y - runtime.lastApplied.position.y)
         + math.abs(actualPosition.z - runtime.lastApplied.position.z)
     local orientationDot = math.abs(quaternionDot(actualOrientation, runtime.lastApplied.orientation))
+    local disturbed = positionDelta > 0.002 or orientationDot < 0.9995
 
-    if positionDelta > 0.002 or orientationDot < 0.9995 then
+    if runtime.mode == MODE.FREELOOK
+        and not runtime.freeLookLocalWriterLogged
+        and (positionDelta > 0.0005 or orientationDot < 0.99999) then
+        runtime.freeLookLocalWriterLogged = true
+        Helpers.Log((
+            "freelook local transform changed between composer updates: position=%.5f orientationDot=%.7f"
+        ):format(positionDelta, orientationDot))
+    end
+
+    if runtime.interferenceLogged then
+        return
+    end
+
+    if disturbed then
         runtime.interferenceFrames = runtime.interferenceFrames + 1
     else
         runtime.interferenceFrames = 0
@@ -1094,6 +1110,19 @@ local function composeAndWrite(fpp, context)
         return false
     end
     runtime.nativePitch = nativePitch
+
+    if runtime.mode == MODE.FREELOOK
+        and not runtime.freeLookParentDriftLogged
+        and math.abs(nativePitch - runtime.entryNativePitch) > 0.05 then
+        runtime.freeLookParentDriftLogged = true
+        Helpers.Log((
+            "freelook native parent moved while locked: entry=%.2f actual=%.2f delta=%.2f"
+        ):format(
+            runtime.entryNativePitch,
+            nativePitch,
+            nativePitch - runtime.entryNativePitch
+        ))
+    end
 
     local compositionNativePitch = nativePitch
     if runtime.heightTransfer.active
@@ -1136,12 +1165,20 @@ local function composeAndWrite(fpp, context)
         -- `freePitch` emulates native parent pitch, but the limits belong to the
         -- final visible camera. Invert the experimental pitch mapping so its
         -- constant downward bias cannot extend freelook below the native floor.
+        -- While the key is held, keep the virtual gaze anchored to the native
+        -- pitch captured at entry. Action consumption normally freezes the real
+        -- parent, but REDengine can still update it for a single frame. Mixing
+        -- that slipped parent into the stored head offset caused the occasional
+        -- apparent reset. Returning intentionally follows the live parent again.
+        local virtualBasePitch = runtime.mode == MODE.FREELOOK
+            and runtime.entryNativePitch
+            or compositionNativePitch
         runtime.freePitch = clamp(
             runtime.freePitch,
-            effectiveFloor - nativePitch,
-            effectiveCeiling - nativePitch
+            effectiveFloor - virtualBasePitch,
+            effectiveCeiling - virtualBasePitch
         )
-        effectiveNativePitch = nativePitch + runtime.freePitch
+        effectiveNativePitch = virtualBasePitch + runtime.freePitch
     end
 
     -- During freelook the real parent is frozen, so drive the height adjustment
@@ -1193,7 +1230,11 @@ local function composeAndWrite(fpp, context)
     }
     local bodySpacePitch = runtime.heightPitch
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
-        bodySpacePitch = bodySpacePitch + runtime.freePitch
+        -- This is usually identical to freePitch. Expressing it as the virtual
+        -- minus actual parent pitch also cancels any native movement that escaped
+        -- the input consumer without changing the visible pose.
+        bodySpacePitch = bodySpacePitch
+            + effectiveNativePitch - compositionNativePitch
     end
     if math.abs(bodySpacePitch) > 0.0001 then
         -- The body-presence offset is authored in the local frame the native
@@ -1224,7 +1265,7 @@ local function composeAndWrite(fpp, context)
     local orientation = headLocalOrientation(
         compositionNativePitch,
         runtime.heightPitch + body.pitch,
-        runtime.freePitch,
+        effectiveNativePitch - compositionNativePitch,
         runtime.freeYaw,
         freeOffset.roll,
         runtime.baseline.orientation
@@ -1351,6 +1392,15 @@ function CameraCore.BeginFreeLook(context)
         runtime.pitchFloor = math.min(componentFloor, runtime.nativePitch)
         runtime.pitchCeiling = math.max(componentCeiling, runtime.nativePitch)
     else
+        -- Returning follows the live native parent because input is already
+        -- unlocked. If freelook is pressed again mid-return, freeze that current
+        -- parent as the new virtual base so the mode change remains continuous.
+        local actualOrientation = fpp:GetLocalOrientation()
+        local resumedNativePitch = actualOrientation
+            and getNativePitch(fpp, actualOrientation)
+            or runtime.nativePitch
+        runtime.nativePitch = resumedNativePitch
+        runtime.entryNativePitch = resumedNativePitch
         runtime.rawYaw = runtime.freeYaw
         runtime.rawPitch = runtime.freePitch
     end
@@ -1362,6 +1412,8 @@ function CameraCore.BeginFreeLook(context)
     runtime.inputSeen.stickX = false
     runtime.inputSeen.stickY = false
     clearInputStats()
+    runtime.freeLookParentDriftLogged = false
+    runtime.freeLookLocalWriterLogged = false
     lockNativeInput(fpp)
     setMode(MODE.FREELOOK, "input pressed")
     return true
@@ -1374,6 +1426,24 @@ function CameraCore.EndFreeLook(fast)
     end
 
     clearInput()
+    if runtime.mode == MODE.FREELOOK then
+        local fpp = Helpers.GetFPP()
+        local actualOrientation = fpp and fpp:GetLocalOrientation()
+        local exitNativePitch = actualOrientation
+            and getNativePitch(fpp, actualOrientation)
+            or nil
+        if exitNativePitch then
+            -- Freelook's held virtual pitch may differ from the real parent if an
+            -- engine update slipped through the action consumer. Rebase the same
+            -- visible gaze onto the live parent before returning; otherwise the
+            -- first unlocked frame would expose that hidden difference as a jump.
+            local virtualPitch = runtime.entryNativePitch + runtime.freePitch
+            runtime.freePitch = virtualPitch - exitNativePitch
+            runtime.rawPitch = runtime.freePitch
+            runtime.nativePitch = exitNativePitch
+            runtime.entryNativePitch = exitNativePitch
+        end
+    end
     Helpers.Log((
         "freelook input: X[n=%d sum=%.2f abs=%.2f max=%.2f] "
             .. "Y[n=%d sum=%.2f abs=%.2f max=%.2f]; yaw=%.2f pitch=%.2f"
@@ -1470,7 +1540,7 @@ function CameraCore.Update(delta, context)
                 inputDelta,
                 fpp,
                 context.hasWeapon,
-                runtime.nativePitch,
+                runtime.entryNativePitch,
                 runtime.heightApplied and context.heightPitch or 0.0
             )
         else
