@@ -86,14 +86,18 @@ local function buildCameraContext(delta)
     -- locomotion keeps the same FPP parent through jumps, falls, hard landings,
     -- knockdowns, climbing, and vaulting, so retaining the correction is safer
     -- than repeatedly transferring it out and back in.
-    local heightCameraEligible = isEnabled
+    local heightCameraCompatible = isEnabled
         and sceneTier == 1
         and not Helpers.IsInVehicle()
-        and not Helpers.IsSwimming()
         and Helpers.IsTakingDown() <= 0
         and not Helpers.IsCarryingBody()
         and not blockingThirdPartyMods()
-    local heightContextEligible = heightCameraEligible
+    -- Keep height disabled for the complete swimming high-level state. The
+    -- hidden native pitch bias can affect REDengine's pitch-driven dive rules.
+    -- Swimming still uses the normal FPP parent, though, so it is safe to hand
+    -- the correction out once on water entry rather than calling ResetPitch().
+    local heightContextEligible = heightCameraCompatible
+        and not Helpers.IsSwimming()
         and (not Helpers.IsInWorkspot() or Helpers.IsTraversalLocomotion())
     local heightEligible = heightContextEligible
         and Config.inner.heightAdjustmentEnabled
@@ -103,7 +107,7 @@ local function buildCameraContext(delta)
         freeEligible = commonEligible and (not hasWeapon or Config.inner.freeLookInCombat),
         heightEligible = heightEligible,
         heightCanTransfer = heightContextEligible,
-        heightCanPreserveTransition = heightCameraEligible,
+        heightCanPreserveTransition = heightCameraCompatible,
         heightResetAllowed = heightContextEligible and not blocksHeightForWeapon,
         -- Keep the requested bias available while ineligible so CameraCore can
         -- transfer it into/out of native pitch during weapon transitions.

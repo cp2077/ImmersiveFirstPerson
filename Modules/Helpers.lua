@@ -95,6 +95,10 @@ function Helpers.GetSceneTier()
     return readPlayerStateInt("SceneTier", 0)
 end
 
+function Helpers.GetHighLevelState()
+    return readPlayerStateInt("HighLevel", 0)
+end
+
 function Helpers.GetDetailedLocomotionState()
     return readPlayerStateInt("LocomotionDetailed", 0)
 end
@@ -128,7 +132,12 @@ function Helpers.IsCarryingBody()
 end
 
 function Helpers.IsSwimming()
-    return readPlayerStateInt("Swimming", 0) > 0
+    -- Surface, dive, and swim-climb are separate locomotion states. Their
+    -- low-level Swimming value is cleared between transitions, sometimes long
+    -- enough for CET to observe a false "left the water" frame. HighLevel stays
+    -- at gamePSMHighLevel.Swimming (6) for the complete water session.
+    return Helpers.GetHighLevelState() == 6
+        or readPlayerStateInt("Swimming", 0) > 0
 end
 
 function Helpers.IsKnockedDown()
