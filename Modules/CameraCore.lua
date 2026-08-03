@@ -20,7 +20,7 @@ local HEIGHT_POSITION_RESTORE_FULL = -40.0
 local HEIGHT_POSITION_RESTORE_OFF = 0.0
 local HEIGHT_BIAS_UP_FULL = 40.0
 local HEIGHT_BIAS_UP_OFF = 80.0
-local HEIGHT_TRANSFER_DURATION = 0.06
+local HEIGHT_TRANSFER_DURATION = 0.08
 local HEIGHT_TRANSFER_TIMEOUT = HEIGHT_TRANSFER_DURATION + 0.30
 local HEIGHT_TRANSFER_TOLERANCE = 0.15
 local HEIGHT_ENABLE_SETTLE_DURATION = 0.25
@@ -725,7 +725,7 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
         if desiredApplied ~= transfer.targetApplied then
             -- Reverse an in-flight handoff around the exact visual pitch it was
             -- holding. Traversal and weapon state can change faster than the
-            -- 60 ms transfer; dropping the local counter-pitch here exposes the
+            -- 80 ms transfer; dropping the local counter-pitch here exposes the
             -- partially moved native parent as an upward camera jump.
             local heldVisualPitch = transfer.heldVisualPitch
             abortHeightTransfer(fpp, "desired state changed", false)
