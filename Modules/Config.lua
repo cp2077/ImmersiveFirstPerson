@@ -17,26 +17,10 @@ local Config = {
 
 local writeFailureLogged = false
 
-local function resolveConfigPath()
-    local sourceInfo = debug.getinfo(1, "S")
-    local source = sourceInfo and sourceInfo.source or nil
-    if type(source) ~= "string" or source:sub(1, 1) ~= "@" then
-        return Vars.CONFIG_FILE_NAME
-    end
-
-    local moduleDirectory = source:sub(2):match("^(.*[\\/])")
-    if not moduleDirectory then
-        return Vars.CONFIG_FILE_NAME
-    end
-
-    -- CET normally makes relative paths local to the mod, but that behavior has
-    -- differed between releases and launch contexts. Resolve from this module's
-    -- own source path so config persistence never depends on process cwd.
-    local modDirectory = moduleDirectory:gsub("Modules[\\/]$", "")
-    return modDirectory .. Vars.CONFIG_FILE_NAME
-end
-
-local CONFIG_PATH = resolveConfigPath()
+-- CET removes Lua's `debug` library and sandboxes relative file access to this
+-- mod's directory. Keep this path relative; trying to discover the source path
+-- with debug.getinfo makes the entire mod fail during require() inside CET.
+local CONFIG_PATH = Vars.CONFIG_FILE_NAME
 
 local function copyDefaults()
     local result = {}
