@@ -864,12 +864,14 @@ local function getFreeLookLimits(hasWeapon)
     return free.MAX_YAW, free.MAX_PITCH_DOWN, free.MAX_PITCH_UP
 end
 
-local function getAvailablePitchLimits(hasWeapon, basePitch)
+local function getAvailablePitchLimits(hasWeapon, basePitch, maximumHeightBias)
     local _, relativeDown, relativeUp = getFreeLookLimits(hasWeapon)
     local floor = runtime.pitchFloor or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
     local ceiling = runtime.pitchCeiling or Vars.FREELOOK.DEFAULT_PITCH_CEILING
-    local availableDown = math.max(0.0, basePitch - floor)
-    local availableUp = math.max(0.0, ceiling - basePitch)
+    local nativeFloor = nativePitchForVisualPitch(floor, maximumHeightBias)
+    local nativeCeiling = nativePitchForVisualPitch(ceiling, maximumHeightBias)
+    local availableDown = math.max(0.0, basePitch - nativeFloor)
+    local availableUp = math.max(0.0, nativeCeiling - basePitch)
 
     -- Outside combat, freelook owns the complete absolute vertical camera range.
     -- A relative +/-85 degree cap strands a view that starts at one pole near
@@ -895,12 +897,62 @@ local function coneRadius(yaw, pitch)
     return (math.abs(yaw) ^ power + math.abs(pitch) ^ power) ^ (1.0 / power)
 end
 
-local function stepHeadCone(yaw, pitch, yawDelta, pitchDelta, hasWeapon, basePitch)
+local function getPitchFloor(yaw, maxYaw, basePitch, maximumHeightBias)
+    local rearProgress = smoothstep(
+        (math.abs(yaw) / maxYaw
+            - Vars.FREELOOK.REAR_PITCH_CLAMP_START_YAW_PROGRESS)
+            / (1.0 - Vars.FREELOOK.REAR_PITCH_CLAMP_START_YAW_PROGRESS)
+    )
+    local visualFloor = runtime.pitchFloor
+        or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
+    visualFloor = visualFloor
+        + (Vars.FREELOOK.REAR_PITCH_FLOOR - visualFloor) * rearProgress
+    local nativeFloor = nativePitchForVisualPitch(
+        visualFloor,
+        maximumHeightBias
+    )
+    return nativeFloor - basePitch
+end
+
+local function stepHeadCone(
+    yaw,
+    pitch,
+    yawDelta,
+    pitchDelta,
+    hasWeapon,
+    basePitch,
+    maximumHeightBias
+)
     local maxYaw, maxPitchDown, maxPitchUp = getFreeLookLimits(hasWeapon)
-    maxPitchDown, maxPitchUp = getAvailablePitchLimits(hasWeapon, basePitch)
+    maxPitchDown, maxPitchUp = getAvailablePitchLimits(
+        hasWeapon,
+        basePitch,
+        maximumHeightBias
+    )
 
     if maxYaw <= 0.0001 then
         return 0.0, 0.0
+    end
+
+    if not hasWeapon and pitchDelta < 0.0 then
+        local prospectiveYaw = clamp(yaw + yawDelta, -maxYaw, maxYaw)
+        local pitchFloor = getPitchFloor(
+            prospectiveYaw,
+            maxYaw,
+            basePitch,
+            maximumHeightBias
+        )
+        -- Use a fixed angular approach rather than a percentage of the range
+        -- remaining at entry. Otherwise starting low collapses the soft zone
+        -- into a few degrees. Only downward input is resisted, so escaping the
+        -- boundary remains immediate.
+        local distance = pitch - pitchFloor
+        local inputScale = smoothstep(clamp(
+            distance / Vars.FREELOOK.PITCH_FLOOR_SOFT_RANGE,
+            0.0,
+            1.0
+        ))
+        pitchDelta = pitchDelta * inputScale
     end
 
     local normalizedYaw = yaw / maxYaw
@@ -961,117 +1013,55 @@ local function stepHeadCone(yaw, pitch, yawDelta, pitchDelta, hasWeapon, basePit
         -- camera through the open neck. Tighten the absolute visible floor only
         -- after the shoulder turn begins; because the floor itself follows a
         -- smooth yaw curve, continuing rearward gently guides the gaze upward.
-        local rearProgress = smoothstep(
-            (math.abs(resultYaw) / maxYaw
-                - Vars.FREELOOK.REAR_PITCH_CLAMP_START_YAW_PROGRESS)
-                / (1.0 - Vars.FREELOOK.REAR_PITCH_CLAMP_START_YAW_PROGRESS)
+        local pitchFloor = getPitchFloor(
+            resultYaw,
+            maxYaw,
+            basePitch,
+            maximumHeightBias
         )
-        if rearProgress > 0.0 then
-            local nativeFloor = runtime.pitchFloor
-                or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
-            local rearFloor = nativeFloor
-                + (Vars.FREELOOK.REAR_PITCH_FLOOR - nativeFloor) * rearProgress
-            resultPitch = math.max(resultPitch, rearFloor - basePitch)
-        end
+        resultPitch = math.max(resultPitch, pitchFloor)
     end
     return resultYaw, resultPitch
 end
 
-function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
+function CameraCore.EvaluateFreeLook(yaw, _, hasWeapon)
     local free = Vars.FREELOOK
-    local maxYaw, maxPitchDown, maxPitchUp = getFreeLookLimits(hasWeapon)
+    local maxYaw = getFreeLookLimits(hasWeapon)
     local absoluteYawProgress = clamp(math.abs(yaw) / maxYaw, 0.0, 1.0)
-    local pitchLimit = composedPitch < 0.0 and maxPitchDown or maxPitchUp
-    local absolutePitchProgress = clamp(math.abs(composedPitch) / pitchLimit, 0.0, 1.0)
     local sideSign = yaw < 0 and 1.0 or -1.0
-    local shoulderProgress = smoothstep(
-        (absoluteYawProgress - free.SHOULDER_START) / (1.0 - free.SHOULDER_START)
-    )
-    -- Once the gaze passes slightly beyond the shoulder into the rear turn,
-    -- rotation and the body-relative setback continue but lateral translation does not.
-    -- Continuing to slide sideways here creates the detached outer-corner pose.
     local lateralYawProgress = math.min(
         absoluteYawProgress,
         free.LATERAL_STOP_YAW_PROGRESS
     )
-    local lateralShoulderProgress = smoothstep(
-        (lateralYawProgress - free.LATERAL_START) / (1.0 - free.LATERAL_START)
+    local lateralProgress = smoothstep(
+        (lateralYawProgress - free.LATERAL_START)
+            / (free.LATERAL_STOP_YAW_PROGRESS - free.LATERAL_START)
     )
-
     local lateralMax = hasWeapon and free.COMBAT_MAX_LATERAL_OFFSET or free.MAX_LATERAL_OFFSET
-    -- Translation leads rotation slightly, like the base of a turning head moving
-    -- over the shoulder before the gaze reaches the side. Its lower maximum keeps
-    -- the earlier movement from making the camera feel detached from the body.
-    local lateralProgress = free.LATERAL_LEAD_BLEND * lateralYawProgress
-        + (1.0 - free.LATERAL_LEAD_BLEND) * lateralShoulderProgress
-    -- Positional/pitch corrections should already be fully engaged around a
-    -- 90-degree side glance even though rotational yaw continues toward the back.
     local sideCorrectionProgress = smoothstep(
-        absoluteYawProgress / free.SIDE_CORRECTION_FULL_YAW_PROGRESS
+        (absoluteYawProgress - free.BODY_FADE_START_YAW_PROGRESS)
+            / (free.BODY_FADE_FULL_YAW_PROGRESS
+                - free.BODY_FADE_START_YAW_PROGRESS)
     )
     local backProgress = smoothstep(
-        (absoluteYawProgress - free.SIDE_CORRECTION_FULL_YAW_PROGRESS)
-            / (1.0 - free.SIDE_CORRECTION_FULL_YAW_PROGRESS)
+        (absoluteYawProgress - free.BACK_START_YAW_PROGRESS)
+            / (free.BACK_FULL_YAW_PROGRESS - free.BACK_START_YAW_PROGRESS)
     )
-    local downwardProgress = composedPitch < 0.0
-        and smoothstep(-composedPitch / maxPitchDown)
-        or 0.0
-    -- Looking down needs extra shoulder clearance to keep the neck seam behind
-    -- the camera. Rear yaw stops lateral travel separately, so this boost cannot
-    -- keep pushing the view into the detached outer-corner pose.
-    local downwardSideProgress = downwardProgress * sideCorrectionProgress
-    local lateralScale = hasWeapon and 1.0
-        or 1.0 + free.DOWNWARD_LATERAL_BOOST * downwardSideProgress
-    local lateral = lateralMax * lateralProgress * lateralScale * sideSign
-    -- This setback belongs to the established shoulder pose, not to downward
-    -- pitch. If it faded while the head looked upward at the side, the camera
-    -- slid forward across the torso even though yaw had not changed.
-    local shoulderBackProgress = smoothstep(
-        (absoluteYawProgress - free.SHOULDER_BACK_START_YAW_PROGRESS)
-            / (free.SHOULDER_BACK_FULL_YAW_PROGRESS
-                - free.SHOULDER_BACK_START_YAW_PROGRESS)
-    )
-
-    -- Do not add a hard yaw deadzone: a shallow power curve delays the visible
-    -- rotation but remains responsive and still reaches the full cone boundary.
-    local visibleYawProgress = absoluteYawProgress ^ free.YAW_EASE_POWER
-    local visibleYaw = (yaw < 0.0 and -1.0 or 1.0) * visibleYawProgress * maxYaw
-
-    -- At an extreme side turn, gently bring vertical gaze back toward neutral.
-    -- Human head pitch loses some range near the shoulder; applying the same rule
-    -- in both directions avoids the broken-neck look without changing cone state.
-    local pitchNormalization = hasWeapon and 0.0 or clamp(
-        -composedPitch * free.SIDE_PITCH_NORMALIZATION,
-        -free.MAX_SIDE_PITCH_NORMALIZATION,
-        free.MAX_SIDE_PITCH_NORMALIZATION
-    ) * sideCorrectionProgress
-    local upwardBias = hasWeapon and 0.0
-        or free.SIDE_UPWARD_BIAS
-            * sideCorrectionProgress
-            * (1.0 - clamp(
-                composedPitch / free.SIDE_UPWARD_BIAS_FADE_PITCH,
-                0.0,
-                1.0
-            ))
-
     local maxRoll = hasWeapon and free.COMBAT_MAX_ROLL or free.MAX_ROLL
     local roll = -sideSign
         * maxRoll
-        * shoulderProgress
-        * (0.20 + 0.80 * absolutePitchProgress)
-        * easeOutCubic(absoluteYawProgress)
+        * smoothstep(
+            (absoluteYawProgress - free.ROLL_START_YAW_PROGRESS)
+                / (1.0 - free.ROLL_START_YAW_PROGRESS)
+        )
 
     return {
-        yaw = visibleYaw,
-        pitch = pitchNormalization + upwardBias,
+        yaw = yaw,
+        pitch = 0.0,
         sideProgress = sideCorrectionProgress,
         backProgress = backProgress,
-        lateral = lateral,
-        -- Native look-down travels forward. Ease a small amount of that movement
-        -- back out during a side turn to keep the neck seam behind the camera.
-        forward = -free.MAX_BACK_OFFSET * sideCorrectionProgress
-            - (hasWeapon and 0.0
-                or free.SHOULDER_BACK_OFFSET * shoulderBackProgress),
+        lateral = lateralMax * lateralProgress * sideSign,
+        forward = hasWeapon and 0.0 or -free.MAX_BACK_OFFSET * backProgress,
         vertical = 0.0,
         roll = roll,
         fovDelta = 0.0,
@@ -1123,17 +1113,14 @@ local function applyFreeLookInput(delta, fpp, hasWeapon, basePitch, maximumHeigh
     pitchDelta = pitchDelta
         + inputAxis(runtime.input.stickY) * invertY * controllerScale
 
-    -- The head cone is a visible-space limit. Downward height bias is constant,
-    -- so using the corrected entry pitch preserves the existing soft approach.
-    local visualBasePitch = basePitch
-        + CameraCore.EvaluateHeightPitch(basePitch, maximumHeightBias)
     runtime.freeYaw, runtime.freePitch = stepHeadCone(
         runtime.freeYaw,
         runtime.freePitch,
         yawDelta,
         pitchDelta,
         hasWeapon,
-        visualBasePitch
+        basePitch,
+        maximumHeightBias
     )
     runtime.rawYaw = runtime.freeYaw
     runtime.rawPitch = runtime.freePitch
@@ -1324,7 +1311,6 @@ local function composeAndWrite(fpp, context)
         body = CameraCore.EvaluateBody(0.0, false, runtime.baseline.fov)
     end
     runtime.bodyProgress = body.progress
-    runtime.bodyPitch = body.pitch
 
     local freeOffset = {
         yaw = 0.0,
@@ -1338,13 +1324,18 @@ local function composeAndWrite(fpp, context)
         fovDelta = 0.0,
     }
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
-        local composedPitch = visualEffectivePitch + body.pitch
         freeOffset = CameraCore.EvaluateFreeLook(
             runtime.freeYaw,
-            composedPitch,
+            visualEffectivePitch,
             context.hasWeapon
         )
     end
+    local bodyInfluence = (runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING)
+        and (1.0 - freeOffset.sideProgress)
+        or 1.0
+    runtime.bodyPitch = body.pitch * bodyInfluence
+    body.fov = runtime.baseline.fov
+        + (body.fov - runtime.baseline.fov) * bodyInfluence
 
     local bodySpaceMotion = NativeCameraCurve.OffsetToReference(
         compositionNativePitch,
@@ -1365,71 +1356,24 @@ local function composeAndWrite(fpp, context)
     bodySpaceMotion.vertical = bodySpaceMotion.vertical
         + (visualPosition.vertical - nativePosition.vertical) * positionRestore
 
-    if not context.hasWeapon then
-        -- Look-down and the experimental height adjustment can move the native
-        -- camera far forward. That is useful while facing the torso, but keeping
-        -- the complete forward correction at a 90-degree head turn places the
-        -- camera in a detached corner. Retain a smaller neck-safe portion there.
-        local motionScale = 1.0
-            - Vars.FREELOOK.SIDE_NATIVE_MOTION_REDUCTION
-                * freeOffset.sideProgress
-        -- The side pose retains a neck-safe fraction of native motion. Past 90
-        -- degrees that same fraction separates the camera from the back, so fade
-        -- it progressively to zero as the rear yaw clamp is approached.
-        motionScale = motionScale
-            * (1.0
-                - Vars.FREELOOK.BACK_NATIVE_MOTION_REDUCTION
-                    * freeOffset.backProgress)
-
-        if effectiveNativePitch > compositionNativePitch then
-            -- The native curve was measured with the camera facing forward.
-            -- Converting its upward translation through a steep frozen entry pitch
-            -- can create a small local drop near the end of a shoulder sweep. Fade
-            -- that remaining upward emulation at large yaw.
-            local upwardProgress = smoothstep(
-                (effectiveNativePitch - compositionNativePitch)
-                    / Vars.FREELOOK.SIDE_UPWARD_MOTION_RANGE
-            )
-            motionScale = motionScale
-                * (1.0
-                    - Vars.FREELOOK.SIDE_UPWARD_MOTION_REDUCTION
-                        * freeOffset.sideProgress
-                        * upwardProgress)
-        end
-
-        bodySpaceMotion.forward = bodySpaceMotion.forward * motionScale
-        bodySpaceMotion.vertical = bodySpaceMotion.vertical * motionScale
+    if not context.hasWeapon and freeOffset.sideProgress > 0.0 then
+        -- At the shoulder, target a neutral body-forward camera position instead
+        -- of scaling the entry-relative delta. This cancels the physical native
+        -- offset from any entry pitch and gives every route to the side one pose.
+        local actualNativePosition = NativeCameraCurve.Evaluate(
+            compositionNativePitch,
+            runtime.baseline.fov
+        )
+        local targetForward = actualNativePosition.forward + bodySpaceMotion.forward
+        targetForward = targetForward * (1.0 - freeOffset.sideProgress)
+        bodySpaceMotion.forward = targetForward - actualNativePosition.forward
     end
     local nativeMotion = nativeMotionToCameraLocal(compositionNativePitch, bodySpaceMotion)
     local bodyPosition = {
-        lateral = body.lateral,
-        forward = body.forward,
-        vertical = body.vertical,
+        lateral = body.lateral * bodyInfluence,
+        forward = body.forward * bodyInfluence,
+        vertical = body.vertical * bodyInfluence,
     }
-    if not context.hasWeapon
-        and (runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING) then
-        -- Keep this correction in body space. Applying its target after the
-        -- entry-pitch conversion made the same final gaze land in a different
-        -- place depending on whether freelook began looking up, level, or down.
-        local sideRiseProgress = smoothstep(
-            (visualEffectivePitch - Vars.FREELOOK.SIDE_FORWARD_HOLD_START_PITCH)
-                / (Vars.FREELOOK.SIDE_FORWARD_HOLD_FULL_PITCH
-                    - Vars.FREELOOK.SIDE_FORWARD_HOLD_START_PITCH)
-        )
-        if sideRiseProgress > 0.0 and freeOffset.sideProgress > 0.0 then
-            local sideRiseBlend = easeOutCubic(sideRiseProgress)
-            local sideReferenceBody = CameraCore.EvaluateBody(
-                Vars.FREELOOK.SIDE_FORWARD_HOLD_START_PITCH,
-                context.crouching,
-                runtime.baseline.fov
-            )
-            local sideTargetForward = sideReferenceBody.forward
-                - Vars.FREELOOK.SIDE_RISE_BACK_OFFSET * sideRiseBlend
-            local sideHold = freeOffset.sideProgress * sideRiseBlend
-            bodyPosition.forward = bodyPosition.forward
-                + (sideTargetForward - bodyPosition.forward) * sideHold
-        end
-    end
     local bodySpacePitch = runtime.heightPitch
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
         -- This is usually identical to freePitch. Expressing it as the virtual
@@ -1467,7 +1411,7 @@ local function composeAndWrite(fpp, context)
     end
     local orientation = headLocalOrientation(
         orientationNativePitch,
-        runtime.heightPitch + body.pitch + freeOffset.pitch,
+        runtime.heightPitch + runtime.bodyPitch + freeOffset.pitch,
         effectiveNativePitch - orientationNativePitch,
         freeOffset.yaw,
         freeOffset.roll,
