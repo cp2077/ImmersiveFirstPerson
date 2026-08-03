@@ -99,6 +99,20 @@ function Helpers.GetDetailedLocomotionState()
     return readPlayerStateInt("LocomotionDetailed", 0)
 end
 
+function Helpers.GetUpperBodyState()
+    return readPlayerStateInt("UpperBody", 0)
+end
+
+function Helpers.GetWeaponState()
+    return readPlayerStateInt("Weapon", 0)
+end
+
+function Helpers.IsTraversalLocomotion()
+    local state = Helpers.GetDetailedLocomotionState()
+    -- gamePSMDetailedLocomotionStates: Climb, Vault, and the four ladder states.
+    return state >= 8 and state <= 13
+end
+
 function Helpers.IsOnLadder()
     local state = Helpers.GetDetailedLocomotionState()
     -- gamePSMDetailedLocomotionStates: Ladder through LadderJump.

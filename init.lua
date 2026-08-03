@@ -11,6 +11,10 @@ local isOverlayOpen = false
 local isEnabled = true
 local isDisabledByApi = false
 local heightResetPending = false
+local heightWeaponBlocked = false
+local heightWeaponClearElapsed = 0.0
+
+local HEIGHT_WEAPON_CLEAR_GRACE = 0.20
 
 local API = {}
 
@@ -46,36 +50,61 @@ local function commonCameraContextAllowed(sceneTier)
         and not blockingThirdPartyMods()
 end
 
-local function buildCameraContext()
+local function updateHeightWeaponBlock(hasWeapon, delta)
+    if hasWeapon then
+        heightWeaponBlocked = true
+        heightWeaponClearElapsed = 0.0
+    elseif heightWeaponBlocked then
+        if Helpers.GetUpperBodyState() ~= 0 then
+            -- Weapon slots disappear during switch, reload, forced-empty-hands,
+            -- and traversal animations. Keep the armed block until that state
+            -- ends instead of treating the temporary empty slot as a holster.
+            heightWeaponClearElapsed = 0.0
+        else
+            heightWeaponClearElapsed = heightWeaponClearElapsed
+                + math.max(tonumber(delta) or 0.0, 0.0)
+            if heightWeaponClearElapsed >= HEIGHT_WEAPON_CLEAR_GRACE then
+                heightWeaponBlocked = false
+                heightWeaponClearElapsed = 0.0
+            end
+        end
+    end
+
+    return heightWeaponBlocked
+end
+
+local function buildCameraContext(delta)
     local sceneTier = Helpers.GetSceneTier()
     local hasWeapon = Helpers.HasWeapon()
+    -- The attachment slot can disappear while the ranged-weapon state machine
+    -- still owns the arms/camera. Treat either signal as armed, then keep a short
+    -- clear grace for the frame gap at the end of those animations.
+    local reportsArmed = hasWeapon or Helpers.GetWeaponState() ~= 0
+    local blocksHeightForWeapon = updateHeightWeaponBlock(reportsArmed, delta)
     local commonEligible = isEnabled and commonCameraContextAllowed(sceneTier)
-    -- Some ordinary on-foot transitions temporarily fail the stricter camera
-    -- context (notably knockdown/landing and traversal workspots). The height
-    -- hack may still perform its brief visual-pitch-preserving exit there. Truly
-    -- incompatible cameras such as vehicles, swimming, takedowns, and staged
-    -- scenes continue to use the hard safety reset.
-    local heightTransitionEligible = isEnabled
-        and sceneTier > 0
-        and sceneTier < 3
+    -- Height has narrower incompatibilities than the body/freelook camera. Base
+    -- locomotion keeps the same FPP parent through jumps, falls, hard landings,
+    -- knockdowns, climbing, and vaulting, so retaining the correction is safer
+    -- than repeatedly transferring it out and back in.
+    local heightCameraEligible = isEnabled
+        and sceneTier == 1
         and not Helpers.IsInVehicle()
         and not Helpers.IsSwimming()
         and Helpers.IsTakingDown() <= 0
         and not Helpers.IsCarryingBody()
         and not blockingThirdPartyMods()
-    local heightContextEligible = commonEligible
-        and sceneTier == 1
-        and (not Helpers.IsInWorkspot() or Helpers.IsOnLadder())
+    local heightContextEligible = heightCameraEligible
+        and (not Helpers.IsInWorkspot() or Helpers.IsTraversalLocomotion())
     local heightEligible = heightContextEligible
         and Config.inner.heightAdjustmentEnabled
-        and not hasWeapon
+        and not blocksHeightForWeapon
     return {
         bodyEligible = commonEligible and not hasWeapon,
         freeEligible = commonEligible and (not hasWeapon or Config.inner.freeLookInCombat),
         heightEligible = heightEligible,
         heightCanTransfer = heightContextEligible,
-        heightCanPreserveTransition = heightTransitionEligible,
-        heightResetAllowed = heightContextEligible and not hasWeapon,
+        heightCanPreserveTransition = heightCameraEligible,
+        heightResetAllowed = heightContextEligible and not blocksHeightForWeapon,
         -- Keep the requested bias available while ineligible so CameraCore can
         -- transfer it into/out of native pitch during weapon transitions.
         heightPitch = Config.inner.heightAdjustmentAmount,
@@ -254,11 +283,11 @@ function ImmersiveFirstPerson.Init()
             return
         end
 
-        local context = buildCameraContext()
+        local context = buildCameraContext(delta)
         if heightResetPending and context.heightResetAllowed then
             CameraCore.ResetHeightAdjustment("height setting changed")
             heightResetPending = false
-            context = buildCameraContext()
+            context = buildCameraContext(0.0)
         end
         CameraCore.Update(delta, context)
     end)
