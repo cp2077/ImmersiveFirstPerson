@@ -28,7 +28,7 @@ return {
         EDGE_SOFT_START = 0.70,
         CONE_POWER = 4.0,
         SHOULDER_START = 0.35,
-        LATERAL_START = 0.18,
+        LATERAL_START = 0.12,
         YAW_EASE_POWER = 1.08,
 
         MAX_YAW = 145.0,
@@ -41,10 +41,13 @@ return {
         COMBAT_MAX_PITCH_DOWN = 30.0,
         COMBAT_MAX_PITCH_UP = 80.0,
 
-        MAX_LATERAL_OFFSET = 0.260,
-        COMBAT_MAX_LATERAL_OFFSET = 0.100,
+        MAX_LATERAL_OFFSET = 0.245,
+        COMBAT_MAX_LATERAL_OFFSET = 0.095,
         MAX_BACK_OFFSET = 0.020,
-        SIDE_PITCH_LIFT = 5.0,
+        SIDE_PITCH_NORMALIZATION = 0.06,
+        MAX_SIDE_PITCH_NORMALIZATION = 5.0,
+        SIDE_UPWARD_MOTION_REDUCTION = 0.25,
+        SIDE_UPWARD_MOTION_RANGE = 60.0,
         MAX_ROLL = 14.0,
         COMBAT_MAX_ROLL = 0.0,
 

@@ -966,9 +966,14 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
     local visibleYawProgress = absoluteYawProgress ^ free.YAW_EASE_POWER
     local visibleYaw = (yaw < 0.0 and -1.0 or 1.0) * visibleYawProgress * maxYaw
 
-    local downwardProgress = clamp(-composedPitch / maxPitchDown, 0.0, 1.0)
-    local pitchLift = hasWeapon and 0.0
-        or free.SIDE_PITCH_LIFT * lateralProgress * downwardProgress
+    -- At an extreme side turn, gently bring vertical gaze back toward neutral.
+    -- Human head pitch loses some range near the shoulder; applying the same rule
+    -- in both directions avoids the broken-neck look without changing cone state.
+    local pitchNormalization = hasWeapon and 0.0 or clamp(
+        -composedPitch * free.SIDE_PITCH_NORMALIZATION,
+        -free.MAX_SIDE_PITCH_NORMALIZATION,
+        free.MAX_SIDE_PITCH_NORMALIZATION
+    ) * lateralProgress
 
     local maxRoll = hasWeapon and free.COMBAT_MAX_ROLL or free.MAX_ROLL
     local roll = -sideSign
@@ -979,7 +984,8 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
 
     return {
         yaw = visibleYaw,
-        pitch = pitchLift,
+        pitch = pitchNormalization,
+        sideProgress = lateralProgress,
         lateral = lateral,
         -- Native look-down travels forward. Ease a small amount of that movement
         -- back out during a side turn to keep the neck seam behind the camera.
@@ -1219,12 +1225,22 @@ local function composeAndWrite(fpp, context)
     local freeOffset = {
         yaw = 0.0,
         pitch = 0.0,
+        sideProgress = 0.0,
         lateral = 0.0,
         forward = 0.0,
         vertical = 0.0,
         roll = 0.0,
         fovDelta = 0.0,
     }
+    if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
+        local composedPitch = visualEffectivePitch + body.pitch
+        freeOffset = CameraCore.EvaluateFreeLook(
+            runtime.freeYaw,
+            composedPitch,
+            context.hasWeapon
+        )
+    end
+
     local bodySpaceMotion = NativeCameraCurve.OffsetToReference(
         compositionNativePitch,
         effectiveNativePitch,
@@ -1243,6 +1259,23 @@ local function composeAndWrite(fpp, context)
     local positionRestore = evaluateHeightPositionRestore(visualEffectivePitch)
     bodySpaceMotion.vertical = bodySpaceMotion.vertical
         + (visualPosition.vertical - nativePosition.vertical) * positionRestore
+
+    if not context.hasWeapon and effectiveNativePitch > compositionNativePitch then
+        -- The native curve was measured with the camera facing forward. Converting
+        -- its upward translation through a steep frozen entry pitch can create a
+        -- small local drop near the end of an over-the-shoulder sweep. Fade only
+        -- that upward emulation at large yaw; downward anti-clipping stays intact.
+        local upwardProgress = smoothstep(
+            (effectiveNativePitch - compositionNativePitch)
+                / Vars.FREELOOK.SIDE_UPWARD_MOTION_RANGE
+        )
+        local motionScale = 1.0
+            - Vars.FREELOOK.SIDE_UPWARD_MOTION_REDUCTION
+                * freeOffset.sideProgress
+                * upwardProgress
+        bodySpaceMotion.forward = bodySpaceMotion.forward * motionScale
+        bodySpaceMotion.vertical = bodySpaceMotion.vertical * motionScale
+    end
     local nativeMotion = nativeMotionToCameraLocal(compositionNativePitch, bodySpaceMotion)
     local bodyPosition = {
         lateral = body.lateral,
@@ -1264,15 +1297,6 @@ local function composeAndWrite(fpp, context)
         local rotatedBody = rotatePitchVector(bodySpacePitch, body)
         bodyPosition.forward = rotatedBody.forward
         bodyPosition.vertical = rotatedBody.vertical
-    end
-
-    if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
-        local composedPitch = visualEffectivePitch + body.pitch
-        freeOffset = CameraCore.EvaluateFreeLook(
-            runtime.freeYaw,
-            composedPitch,
-            context.hasWeapon
-        )
     end
 
     local position = {
