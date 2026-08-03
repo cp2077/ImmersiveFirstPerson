@@ -974,6 +974,14 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
         -free.MAX_SIDE_PITCH_NORMALIZATION,
         free.MAX_SIDE_PITCH_NORMALIZATION
     ) * lateralProgress
+    local upwardBias = hasWeapon and 0.0
+        or free.SIDE_UPWARD_BIAS
+            * lateralProgress
+            * (1.0 - clamp(
+                composedPitch / free.SIDE_UPWARD_BIAS_FADE_PITCH,
+                0.0,
+                1.0
+            ))
 
     local maxRoll = hasWeapon and free.COMBAT_MAX_ROLL or free.MAX_ROLL
     local roll = -sideSign
@@ -984,7 +992,7 @@ function CameraCore.EvaluateFreeLook(yaw, composedPitch, hasWeapon)
 
     return {
         yaw = visibleYaw,
-        pitch = pitchNormalization,
+        pitch = pitchNormalization + upwardBias,
         sideProgress = lateralProgress,
         lateral = lateral,
         -- Native look-down travels forward. Ease a small amount of that movement
