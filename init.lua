@@ -10,6 +10,10 @@ local isLoaded = false
 local isOverlayOpen = false
 local isEnabled = true
 local isDisabledByApi = false
+local experimentalHeight = {
+    enabled = true,
+    pitchBias = 8,
+}
 
 local API = {}
 
@@ -49,9 +53,12 @@ end
 local function buildCameraContext()
     local hasWeapon = Helpers.HasWeapon()
     local commonEligible = isEnabled and commonCameraContextAllowed()
+    local heightEligible = commonEligible and experimentalHeight.enabled
     return {
         bodyEligible = commonEligible and not hasWeapon,
         freeEligible = commonEligible and (not hasWeapon or Config.inner.freeLookInCombat),
+        heightEligible = heightEligible,
+        heightPitch = heightEligible and experimentalHeight.pitchBias or 0,
         crouching = Helpers.IsCrouching(),
         hasWeapon = hasWeapon,
     }
@@ -290,6 +297,25 @@ function ImmersiveFirstPerson.Init()
         )
         if changed then
             Config.SaveConfig()
+        end
+
+        ImGui.Separator()
+        ImGui.Text("Experimental")
+        experimentalHeight.enabled, changed = ImGui.Checkbox(
+            "Native eye-height bias",
+            experimentalHeight.enabled
+        )
+        tooltipIfHovered(
+            "Biases the native camera upward, then counter-pitches the visible camera."
+        )
+        if experimentalHeight.enabled then
+            experimentalHeight.pitchBias, changed = ImGui.SliderInt(
+                "Height bias (degrees)",
+                experimentalHeight.pitchBias,
+                1,
+                20
+            )
+            tooltipIfHovered("Runtime-only MVP control; resets when CET reloads.")
         end
 
         ImGui.Text("Camera state: " .. CameraCore.GetMode())

@@ -13,6 +13,14 @@ local MODE = {
     SUSPENDED = "suspended",
 }
 
+-- Experimental eye-height hack. The local camera counter-rotates a deliberately
+-- upward-biased native camera; these pitch windows fade that bias where the
+-- remapping would otherwise interfere with vertical limits or look-down framing.
+local HEIGHT_BIAS_DOWN_OFF = -40.0
+local HEIGHT_BIAS_DOWN_FULL = 0.0
+local HEIGHT_BIAS_UP_FULL = 40.0
+local HEIGHT_BIAS_UP_OFF = 80.0
+
 local runtime = {
     mode = MODE.SUSPENDED,
     ownsCamera = false,
@@ -21,6 +29,7 @@ local runtime = {
     nativePitch = 0,
     bodyProgress = 0,
     bodyPitch = 0,
+    heightPitch = 0,
     freeYaw = 0,
     freePitch = 0,
     rawYaw = 0,
@@ -199,7 +208,9 @@ local function headLocalOrientation(
     baselineOrientation
 )
     -- Native pitch belongs to the component's parent. Cancel it locally before
-    -- head yaw, then put native + body + head pitch back after yaw. This gives:
+    -- head yaw, then put native + local corrections + head pitch back after yaw.
+    -- `bodyPitch` includes both immersive look-down pitch and the experimental
+    -- eye-height counter-pitch. This gives:
     --
     --   world = bodyYaw * headYaw * combinedPitch * headRoll * baseline
     --
@@ -366,6 +377,7 @@ local function releaseCamera(fpp)
     runtime.lastApplied = nil
     runtime.bodyProgress = 0
     runtime.bodyPitch = 0
+    runtime.heightPitch = 0
 end
 
 local function easeOutCubic(t)
@@ -375,6 +387,23 @@ end
 local function smoothstep(t)
     t = clamp(t, 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
+end
+
+function CameraCore.EvaluateHeightPitch(nativePitch, maximumBias)
+    maximumBias = clamp(tonumber(maximumBias) or 0.0, 0.0, 20.0)
+    if maximumBias <= 0.0 then
+        return 0.0
+    end
+
+    local downActivation = smoothstep(
+        (nativePitch - HEIGHT_BIAS_DOWN_OFF)
+            / (HEIGHT_BIAS_DOWN_FULL - HEIGHT_BIAS_DOWN_OFF)
+    )
+    local upActivation = 1.0 - smoothstep(
+        (nativePitch - HEIGHT_BIAS_UP_FULL)
+            / (HEIGHT_BIAS_UP_OFF - HEIGHT_BIAS_UP_FULL)
+    )
+    return -maximumBias * downActivation * upActivation
 end
 
 local function normalizeBodyPitch(nativePitch)
@@ -675,11 +704,30 @@ local function composeAndWrite(fpp, context)
         return false
     end
     runtime.nativePitch = nativePitch
-
-    local bodyDriverPitch = nativePitch
+    local effectiveNativePitch = nativePitch
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
-        bodyDriverPitch = nativePitch + runtime.freePitch
+        local floor = runtime.pitchFloor or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
+        local ceiling = runtime.pitchCeiling or Vars.FREELOOK.DEFAULT_PITCH_CEILING
+        -- `freePitch` emulates native parent pitch. Keeping that hidden pitch in
+        -- the component's absolute range also lets the height bias fade to zero
+        -- at both vertical poles without reducing the visible camera range.
+        runtime.freePitch = clamp(
+            runtime.freePitch,
+            floor - nativePitch,
+            ceiling - nativePitch
+        )
+        effectiveNativePitch = nativePitch + runtime.freePitch
     end
+
+    -- During freelook the real parent is frozen, so drive the height fade from
+    -- the emulated native pitch. Looking down therefore removes the height hack
+    -- exactly as native mouse look does.
+    runtime.heightPitch = CameraCore.EvaluateHeightPitch(
+        effectiveNativePitch,
+        context.heightPitch
+    )
+    local visualEffectivePitch = effectiveNativePitch + runtime.heightPitch
+    local bodyDriverPitch = visualEffectivePitch
     local body = CameraCore.EvaluateBody(
         bodyDriverPitch,
         context.crouching,
@@ -691,34 +739,6 @@ local function composeAndWrite(fpp, context)
     runtime.bodyProgress = body.progress
     runtime.bodyPitch = body.pitch
 
-    if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
-        local floor = runtime.pitchFloor or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
-        local ceiling = runtime.pitchCeiling or Vars.FREELOOK.DEFAULT_PITCH_CEILING
-        -- Clamp the emulated native pitch, not the final composed pitch. The
-        -- immersive body correction is additive and normally extends the native
-        -- downward view by another few degrees.
-        runtime.freePitch = clamp(
-            runtime.freePitch,
-            floor - nativePitch,
-            ceiling - nativePitch
-        )
-        -- Body pitch correction is itself driven by the effective gaze. If the
-        -- absolute guard changed freelook pitch, refresh all body channels once.
-        local correctedDriverPitch = nativePitch + runtime.freePitch
-        if math.abs(correctedDriverPitch - bodyDriverPitch) > 0.0001 then
-            body = CameraCore.EvaluateBody(
-                correctedDriverPitch,
-                context.crouching,
-                runtime.baseline.fov
-            )
-            if not context.bodyEligible then
-                body = CameraCore.EvaluateBody(0.0, false, runtime.baseline.fov)
-            end
-            runtime.bodyProgress = body.progress
-            runtime.bodyPitch = body.pitch
-        end
-    end
-
     local freeOffset = {
         lateral = 0.0,
         forward = 0.0,
@@ -726,30 +746,41 @@ local function composeAndWrite(fpp, context)
         roll = 0.0,
         fovDelta = 0.0,
     }
-    local effectiveNativePitch = nativePitch
-    if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
-        effectiveNativePitch = nativePitch + runtime.freePitch
-    end
     local bodySpaceMotion = NativeCameraCurve.OffsetToReference(
         nativePitch,
         effectiveNativePitch,
         runtime.baseline.fov
     )
+
+    -- Looking upward moves the native parent both up and backward. Keep the
+    -- vertical part (it is the actual eye-height gain and the point NPCs track),
+    -- but cancel only the unwanted backward drift against the visually corrected
+    -- pitch. This is intentionally body-space before the local conversion below.
+    local nativePosition = NativeCameraCurve.Evaluate(effectiveNativePitch)
+    local visualPosition = NativeCameraCurve.Evaluate(visualEffectivePitch)
+    bodySpaceMotion.forward = bodySpaceMotion.forward
+        + visualPosition.forward - nativePosition.forward
     local nativeMotion = nativeMotionToCameraLocal(nativePitch, bodySpaceMotion)
     local bodyPosition = {
         lateral = body.lateral,
         forward = body.forward,
         vertical = body.vertical,
     }
+    local bodySpacePitch = runtime.heightPitch
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
+        bodySpacePitch = bodySpacePitch + runtime.freePitch
+    end
+    if math.abs(bodySpacePitch) > 0.0001 then
         -- The body-presence offset is authored in the local frame the native
-        -- camera would have at the effective pitch. Rotate it into the frozen
-        -- entry parent's frame before writing the component transform.
-        local rotatedBody = rotatePitchVector(runtime.freePitch, body)
+        -- camera would have at the visual pitch. Rotate it through both the
+        -- experimental height counter-pitch and any freelook pitch.
+        local rotatedBody = rotatePitchVector(bodySpacePitch, body)
         bodyPosition.forward = rotatedBody.forward
         bodyPosition.vertical = rotatedBody.vertical
+    end
 
-        local composedPitch = effectiveNativePitch + body.pitch
+    if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
+        local composedPitch = visualEffectivePitch + body.pitch
         freeOffset = CameraCore.EvaluateFreeLook(
             runtime.freeYaw,
             composedPitch,
@@ -767,7 +798,7 @@ local function composeAndWrite(fpp, context)
     }
     local orientation = headLocalOrientation(
         nativePitch,
-        body.pitch,
+        runtime.heightPitch + body.pitch,
         runtime.freePitch,
         runtime.freeYaw,
         freeOffset.roll,
@@ -976,7 +1007,7 @@ function CameraCore.Update(delta, context)
         return
     end
 
-    if not context.bodyEligible then
+    if not context.bodyEligible and not context.heightEligible then
         releaseCamera(fpp)
         setMode(MODE.SUSPENDED, "camera context invalid")
         return
@@ -989,17 +1020,20 @@ function CameraCore.Update(delta, context)
     end
 
     runtime.nativePitch = nativePitch
-    runtime.bodyProgress = normalizeBodyPitch(nativePitch)
-    if runtime.bodyProgress <= 0.0001 then
+    runtime.heightPitch = CameraCore.EvaluateHeightPitch(nativePitch, context.heightPitch)
+    local visualPitch = nativePitch + runtime.heightPitch
+    runtime.bodyProgress = normalizeBodyPitch(visualPitch)
+    local heightActive = context.heightEligible and math.abs(runtime.heightPitch) > 0.0001
+    if runtime.bodyProgress <= 0.0001 and not heightActive then
         releaseCamera(fpp)
-        setMode(MODE.NATIVE, "look-down correction inactive")
+        setMode(MODE.NATIVE, "camera corrections inactive")
         return
     end
 
     if not captureBaseline(fpp) then
         return
     end
-    setMode(MODE.BODY, "look-down correction active")
+    setMode(MODE.BODY, "camera correction active")
     composeAndWrite(fpp, context)
 end
 
@@ -1017,6 +1051,7 @@ function CameraCore.Suspend(reason)
     runtime.freePitch = 0
     runtime.rawYaw = 0
     runtime.rawPitch = 0
+    runtime.heightPitch = 0
     runtime.pitchFloor = nil
     runtime.pitchCeiling = nil
     runtime.entryNativePitch = 0.0
@@ -1057,6 +1092,7 @@ function CameraCore.GetDebugState()
         nativePitch = runtime.nativePitch,
         bodyProgress = runtime.bodyProgress,
         bodyPitch = runtime.bodyPitch,
+        heightPitch = runtime.heightPitch,
         freeYaw = runtime.freeYaw,
         freePitch = runtime.freePitch,
         rawYaw = runtime.rawYaw,
