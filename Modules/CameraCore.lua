@@ -37,10 +37,10 @@ local runtime = {
     heightTransfer = {
         active = false,
         targetApplied = false,
-        startNativePitch = 0.0,
         targetNativePitch = 0.0,
         commandedNativePitch = 0.0,
         heldVisualPitch = 0.0,
+        easedProgress = 0.0,
         boundProperty = nil,
         originalPitchMin = nil,
         originalPitchMax = nil,
@@ -468,7 +468,13 @@ local function abortHeightTransfer(fpp, reason, rememberFailure)
     end
 
     restoreHeightTransferLimits(fpp)
-    if rememberFailure then
+    if rememberFailure and not transfer.targetApplied then
+        -- Weapon contexts cannot safely retain the eye-height counter-pitch.
+        -- If REDengine refuses the cosmetic handoff, prefer a possible snap back
+        -- to the vanilla weapon camera over stranding the height hack in combat.
+        runtime.heightApplied = false
+        transfer.failedDesired = nil
+    elseif rememberFailure then
         transfer.failedDesired = transfer.targetApplied
     end
     transfer.active = false
@@ -521,11 +527,18 @@ local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias
         or heldVisualPitch
 
     -- At an absolute pole there may be no native range into which the local
-    -- correction can be transferred. Refuse the handoff instead of completing
-    -- it with a residual visible jump.
+    -- correction can be transferred. Enabling the experiment can safely wait;
+    -- disabling it for a weapon must still reach a valid vanilla camera pitch.
     if targetNativePitch < originalPitchMin + HEIGHT_TRANSFER_TOLERANCE
         or targetNativePitch > originalPitchMax - HEIGHT_TRANSFER_TOLERANCE then
-        return false, "target lies outside native pitch range"
+        if desiredApplied then
+            return false, "target lies outside native pitch range"
+        end
+        targetNativePitch = clamp(
+            targetNativePitch,
+            originalPitchMin + HEIGHT_TRANSFER_TOLERANCE,
+            originalPitchMax - HEIGHT_TRANSFER_TOLERANCE
+        )
     end
 
     if math.abs(targetNativePitch - nativePitch) <= HEIGHT_TRANSFER_TOLERANCE then
@@ -536,10 +549,10 @@ local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias
 
     transfer.active = true
     transfer.targetApplied = desiredApplied
-    transfer.startNativePitch = nativePitch
     transfer.targetNativePitch = targetNativePitch
     transfer.commandedNativePitch = nativePitch
     transfer.heldVisualPitch = heldVisualPitch
+    transfer.easedProgress = 0.0
     transfer.originalPitchMin = originalPitchMin
     transfer.originalPitchMax = originalPitchMax
     transfer.elapsed = 0.0
@@ -577,6 +590,25 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
         if desiredApplied ~= transfer.targetApplied then
             abortHeightTransfer(fpp, "desired state changed", false)
         else
+            -- A pitch bound only blocks motion on one side. Any motion that made
+            -- it through since our previous command is real player input, so move
+            -- the held visual pitch with it instead of mistaking it for handoff
+            -- error or completing at an unrelated absolute angle.
+            transfer.heldVisualPitch = transfer.heldVisualPitch
+                + nativePitch - transfer.commandedNativePitch
+            local targetNativePitch = transfer.targetApplied
+                and nativePitchForVisualPitch(
+                    transfer.heldVisualPitch,
+                    context.heightPitch
+                )
+                or transfer.heldVisualPitch
+            targetNativePitch = clamp(
+                targetNativePitch,
+                transfer.originalPitchMin + HEIGHT_TRANSFER_TOLERANCE,
+                transfer.originalPitchMax - HEIGHT_TRANSFER_TOLERANCE
+            )
+            transfer.targetNativePitch = targetNativePitch
+
             transfer.elapsed = transfer.elapsed + math.max(tonumber(delta) or 0.0, 0.0)
             local progress = clamp(
                 transfer.elapsed / HEIGHT_TRANSFER_DURATION,
@@ -584,22 +616,26 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
                 1.0
             )
             local eased = smoothstep(progress)
-            local commandedNativePitch = transfer.startNativePitch
-                + (transfer.targetNativePitch - transfer.startNativePitch) * eased
+            local remainingBlend = 1.0
+            if transfer.easedProgress < 1.0 then
+                remainingBlend = clamp(
+                    (eased - transfer.easedProgress)
+                        / (1.0 - transfer.easedProgress),
+                    0.0,
+                    1.0
+                )
+            end
+            local commandedNativePitch = nativePitch
+                + (targetNativePitch - nativePitch) * remainingBlend
             local wrote, reason = writeHeightTransferBound(fpp, commandedNativePitch)
             if not wrote then
                 abortHeightTransfer(fpp, reason, true)
                 return
             end
+            transfer.easedProgress = eased
 
-            local reachedTarget
-            if transfer.boundProperty == "pitchMax" then
-                reachedTarget = nativePitch
-                    <= transfer.targetNativePitch + HEIGHT_TRANSFER_TOLERANCE
-            else
-                reachedTarget = nativePitch
-                    >= transfer.targetNativePitch - HEIGHT_TRANSFER_TOLERANCE
-            end
+            local reachedTarget = math.abs(nativePitch - targetNativePitch)
+                <= HEIGHT_TRANSFER_TOLERANCE
 
             if progress >= 1.0 and reachedTarget then
                 restoreHeightTransferLimits(fpp)
@@ -628,8 +664,19 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
             context.heightPitch
         )
         if not started then
-            transfer.failedDesired = desiredApplied
-            Helpers.Log("native pitch handoff unavailable: " .. tostring(reason))
+            if desiredApplied then
+                transfer.failedDesired = true
+                Helpers.Log("native pitch handoff unavailable: " .. tostring(reason))
+            else
+                -- Never leave the experimental local counter-pitch on a weapon
+                -- camera merely because a seamless native transfer was impossible.
+                runtime.heightApplied = false
+                transfer.failedDesired = nil
+                Helpers.Log(
+                    "native pitch handoff unavailable; height forced off: "
+                        .. tostring(reason)
+                )
+            end
         end
     end
 end
