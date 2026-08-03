@@ -13,7 +13,7 @@ local MODE = {
     SUSPENDED = "suspended",
 }
 
--- Experimental eye-height hack. Keep its angular bias constant while looking
+-- Experimental height adjustment. Keep its angular bias constant while looking
 -- downward so the visible camera remains exactly 1:1 with native input. Only the
 -- resulting positional lift fades out across this look-down window.
 local HEIGHT_POSITION_RESTORE_FULL = -40.0
@@ -233,7 +233,7 @@ local function headLocalOrientation(
     -- Native pitch belongs to the component's parent. Cancel it locally before
     -- head yaw, then put native + local corrections + head pitch back after yaw.
     -- `bodyPitch` includes both immersive look-down pitch and the experimental
-    -- eye-height counter-pitch. This gives:
+    -- height-adjustment counter-pitch. This gives:
     --
     --   world = bodyYaw * headYaw * combinedPitch * headRoll * baseline
     --
@@ -558,7 +558,7 @@ local function abortHeightTransfer(fpp, reason, rememberFailure)
 
     restoreHeightTransferLimits(fpp)
     if rememberFailure and not transfer.targetApplied then
-        -- Weapon contexts cannot safely retain the eye-height counter-pitch.
+        -- Weapon contexts cannot safely retain the height counter-pitch.
         -- If REDengine refuses the cosmetic handoff, prefer a possible snap back
         -- to the vanilla weapon camera over stranding the height hack in combat.
         runtime.heightApplied = false
@@ -1175,8 +1175,8 @@ local function composeAndWrite(fpp, context)
     -- Looking upward moves the native parent both up and backward. Always cancel
     -- the unwanted backward drift. Keep its vertical lift near level view, but
     -- progressively return the *local* camera to the recorded visual position
-    -- while looking down. The native parent remains elevated for NPC eye tracking,
-    -- and no opposing angular fade is needed, so vertical input stays 1:1.
+    -- while looking down. The native parent remains elevated, and no opposing
+    -- angular fade is needed, so vertical input stays 1:1.
     local nativePosition = NativeCameraCurve.Evaluate(effectiveNativePitch)
     local visualPosition = NativeCameraCurve.Evaluate(visualEffectivePitch)
     bodySpaceMotion.forward = bodySpaceMotion.forward
@@ -1420,6 +1420,15 @@ function CameraCore.Update(delta, context)
     local inputDelta = math.min(elapsedDelta, 0.10)
     maintainInputUnlock(fpp)
 
+    if not context.heightCanTransfer
+        and (runtime.heightApplied == true
+            or runtime.heightTransfer.active
+            or runtime.heightPitchFloor.active) then
+        -- Staged scenes, workspots, vehicles, and other special contexts should
+        -- never inherit the pitch offset used to create the height adjustment.
+        CameraCore.ResetHeightAdjustment("height context invalid")
+    end
+
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
         if not context.freeEligible then
             CameraCore.Suspend("freelook context invalid")
@@ -1443,11 +1452,7 @@ function CameraCore.Update(delta, context)
     end
 
     if not context.bodyEligible and not context.heightCanTransfer then
-        abortHeightTransfer(fpp, "camera context invalid", false)
-        restoreHeightPitchFloor(fpp)
-        runtime.heightApplied = nil
-        releaseCamera(fpp)
-        setMode(MODE.SUSPENDED, "camera context invalid")
+        CameraCore.Suspend("camera context invalid")
         return
     end
 
@@ -1505,9 +1510,12 @@ end
 
 function CameraCore.Suspend(reason)
     local fpp = Helpers.GetFPP()
+    local resetNativePitch = runtime.heightApplied == true
+        or runtime.heightTransfer.active
+        or runtime.heightPitchFloor.active
     abortHeightTransfer(fpp, reason or "suspended", false)
     restoreHeightPitchFloor(fpp)
-    runtime.heightApplied = nil
+    runtime.heightApplied = resetNativePitch and false or nil
     clearInput()
     runtime.freeYaw = 0
     runtime.freePitch = 0
@@ -1520,7 +1528,26 @@ function CameraCore.Suspend(reason)
     runtime.returnElapsed = 0
     unlockNativeInput(fpp)
     releaseCamera(fpp)
+    if resetNativePitch and fpp then
+        pcall(function()
+            fpp:ResetPitch()
+        end)
+    end
     setMode(MODE.SUSPENDED, reason or "suspended")
+end
+
+function CameraCore.ResetHeightAdjustment(reason)
+    -- UI changes deliberately return the visible camera to level first. The
+    -- regular height handoff then transfers the new amount into native pitch,
+    -- producing vertical movement without visibly pitching the view up or down.
+    CameraCore.Suspend(reason or "height adjustment changed")
+    local fpp = Helpers.GetFPP()
+    if fpp then
+        pcall(function()
+            fpp:ResetPitch()
+        end)
+    end
+    runtime.heightApplied = false
 end
 
 function CameraCore.Pause(reason)

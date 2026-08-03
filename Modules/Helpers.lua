@@ -95,6 +95,16 @@ function Helpers.GetSceneTier()
     return readPlayerStateInt("SceneTier", 0)
 end
 
+function Helpers.GetDetailedLocomotionState()
+    return readPlayerStateInt("LocomotionDetailed", 0)
+end
+
+function Helpers.IsOnLadder()
+    local state = Helpers.GetDetailedLocomotionState()
+    -- gamePSMDetailedLocomotionStates: Ladder through LadderJump.
+    return state >= 10 and state <= 13
+end
+
 function Helpers.IsTakingDown()
     return readPlayerStateInt("Takedown", 0)
 end
@@ -127,6 +137,19 @@ end
 function Helpers.HasMountedVehicle()
     local player = Game.GetPlayer()
     return player ~= nil and Game['GetMountedVehicle;GameObject'](player) ~= nil
+end
+
+function Helpers.IsInWorkspot()
+    local player = Game.GetPlayer()
+    local workspotSystem = Game.GetWorkspotSystem()
+    if not player or not workspotSystem then
+        return false
+    end
+
+    local ok, active = pcall(function()
+        return workspotSystem:IsActorInWorkspot(player)
+    end)
+    return ok and active == true
 end
 
 function Helpers.IsInVehicle()

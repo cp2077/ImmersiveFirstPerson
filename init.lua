@@ -10,10 +10,7 @@ local isLoaded = false
 local isOverlayOpen = false
 local isEnabled = true
 local isDisabledByApi = false
-local experimentalHeight = {
-    enabled = true,
-    pitchBias = 8,
-}
+local heightResetPending = false
 
 local API = {}
 
@@ -38,8 +35,7 @@ local function blockingThirdPartyMods()
     return false
 end
 
-local function commonCameraContextAllowed()
-    local sceneTier = Helpers.GetSceneTier()
+local function commonCameraContextAllowed(sceneTier)
     return sceneTier > 0
         and sceneTier < 3
         and not Helpers.IsInVehicle()
@@ -51,17 +47,24 @@ local function commonCameraContextAllowed()
 end
 
 local function buildCameraContext()
+    local sceneTier = Helpers.GetSceneTier()
     local hasWeapon = Helpers.HasWeapon()
-    local commonEligible = isEnabled and commonCameraContextAllowed()
-    local heightEligible = commonEligible and experimentalHeight.enabled and not hasWeapon
+    local commonEligible = isEnabled and commonCameraContextAllowed(sceneTier)
+    local heightContextEligible = commonEligible
+        and sceneTier == 1
+        and (not Helpers.IsInWorkspot() or Helpers.IsOnLadder())
+    local heightEligible = heightContextEligible
+        and Config.inner.heightAdjustmentEnabled
+        and not hasWeapon
     return {
         bodyEligible = commonEligible and not hasWeapon,
         freeEligible = commonEligible and (not hasWeapon or Config.inner.freeLookInCombat),
         heightEligible = heightEligible,
-        heightCanTransfer = commonEligible,
+        heightCanTransfer = heightContextEligible,
+        heightResetAllowed = heightContextEligible and not hasWeapon,
         -- Keep the requested bias available while ineligible so CameraCore can
         -- transfer it into/out of native pitch during weapon transitions.
-        heightPitch = experimentalHeight.pitchBias,
+        heightPitch = Config.inner.heightAdjustmentAmount,
         crouching = Helpers.IsCrouching(),
         hasWeapon = hasWeapon,
     }
@@ -235,7 +238,13 @@ function ImmersiveFirstPerson.Init()
             return
         end
 
-        CameraCore.Update(delta, buildCameraContext())
+        local context = buildCameraContext()
+        if heightResetPending and context.heightResetAllowed then
+            CameraCore.ResetHeightAdjustment("height setting changed")
+            heightResetPending = false
+            context = buildCameraContext()
+        end
+        CameraCore.Update(delta, context)
     end)
 
     registerForEvent("onDraw", function()
@@ -308,21 +317,32 @@ function ImmersiveFirstPerson.Init()
 
         ImGui.Separator()
         ImGui.Text("Experimental")
-        experimentalHeight.enabled, changed = ImGui.Checkbox(
-            "Native eye-height bias",
-            experimentalHeight.enabled
+        Config.inner.heightAdjustmentEnabled, changed = ImGui.Checkbox(
+            "Enable height adjustment",
+            Config.inner.heightAdjustmentEnabled
         )
-        tooltipIfHovered(
-            "Biases the native camera upward, then counter-pitches the visible camera."
-        )
-        if experimentalHeight.enabled then
-            experimentalHeight.pitchBias, changed = ImGui.SliderInt(
-                "Height bias (degrees)",
-                experimentalHeight.pitchBias,
+        tooltipIfHovered("Experimental apparent player-height adjustment.")
+        if changed then
+            Config.SaveConfig()
+            heightResetPending = true
+        end
+        if Config.inner.heightAdjustmentEnabled then
+            Config.inner.heightAdjustmentAmount, changed = ImGui.SliderInt(
+                "Height amount",
+                math.floor(Config.inner.heightAdjustmentAmount),
                 1,
                 30
             )
-            tooltipIfHovered("Runtime-only MVP control; resets when CET reloads.")
+            tooltipIfHovered("Higher values increase height and the chance of camera artifacts.")
+            if changed then
+                Config.SaveConfig()
+                heightResetPending = true
+            end
+            ImGui.TextWrapped(
+                "Experimental: active only during normal on-foot gameplay with weapons "
+                    .. "holstered. Larger values may cause clipping, visual artifacts, "
+                    .. "or unusual mouse/camera movement."
+            )
         end
 
         ImGui.Text("Camera state: " .. CameraCore.GetMode())

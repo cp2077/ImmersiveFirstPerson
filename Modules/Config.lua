@@ -8,6 +8,8 @@ local defaults = {
     smoothRestoreSpeed = 15,
     freeLookInCombat = true,
     dontChangeFov = false,
+    heightAdjustmentEnabled = false,
+    heightAdjustmentAmount = 8,
 }
 
 local Config = {
@@ -93,6 +95,12 @@ local function validate(config)
     result.smoothRestore = result.smoothRestore == true
     result.freeLookInCombat = result.freeLookInCombat == true
     result.dontChangeFov = result.dontChangeFov == true
+    result.heightAdjustmentEnabled = result.heightAdjustmentEnabled == true
+    result.heightAdjustmentAmount = math.floor(clamp(
+        tonumber(result.heightAdjustmentAmount) or defaults.heightAdjustmentAmount,
+        1,
+        30
+    ) + 0.5)
     result.version = Vars.CONFIG_VERSION
     return result
 end

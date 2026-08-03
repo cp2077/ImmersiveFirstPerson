@@ -1,6 +1,6 @@
 return {
     CONFIG_FILE_NAME = "config.json",
-    CONFIG_VERSION = 2,
+    CONFIG_VERSION = 3,
 
     BODY = {
         -- Native look-down angle where body-presence correction starts / reaches full strength.
