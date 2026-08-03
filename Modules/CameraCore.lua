@@ -56,6 +56,7 @@ local runtime = {
         originalPitchMax = nil,
         elapsed = 0.0,
         retryRemaining = 0.0,
+        heldVisualOverride = nil,
     },
     freeYaw = 0,
     freePitch = 0,
@@ -580,6 +581,7 @@ local function abortHeightTransfer(fpp, reason, rememberFailure)
     end
 
     restoreHeightTransferLimits(fpp)
+    transfer.heldVisualOverride = nil
     if rememberFailure and not transfer.targetApplied then
         -- Weapon contexts cannot safely retain the height counter-pitch.
         -- If REDengine refuses the cosmetic handoff, prefer a possible snap back
@@ -627,6 +629,8 @@ end
 
 local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias)
     local transfer = runtime.heightTransfer
+    local heldVisualOverride = transfer.heldVisualOverride
+    transfer.heldVisualOverride = nil
     if not desiredApplied and not restoreHeightPitchFloor(fpp) then
         return false, "native pitch floor could not be restored"
     end
@@ -648,7 +652,9 @@ local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias
     local currentHeightPitch = runtime.heightApplied
         and CameraCore.EvaluateHeightPitch(nativePitch, maximumBias)
         or 0.0
-    local heldVisualPitch = nativePitch + currentHeightPitch
+    local heldVisualPitch = finite(heldVisualOverride)
+        and heldVisualOverride
+        or nativePitch + currentHeightPitch
     local targetNativePitch = desiredApplied
         and nativePitchForVisualPitch(heldVisualPitch, maximumBias)
         or heldVisualPitch
@@ -717,14 +723,14 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
 
     if transfer.active then
         if desiredApplied ~= transfer.targetApplied then
-            -- If enable is interrupted after moving native pitch, merely
-            -- dropping the local counter-pitch exposes that partial movement as
-            -- the exact upward jump this handoff exists to hide.
-            abortHeightTransfer(
-                fpp,
-                "desired state changed",
-                transfer.targetApplied
-            )
+            -- Reverse an in-flight handoff around the exact visual pitch it was
+            -- holding. Traversal and weapon state can change faster than the
+            -- 60 ms transfer; dropping the local counter-pitch here exposes the
+            -- partially moved native parent as an upward camera jump.
+            local heldVisualPitch = transfer.heldVisualPitch
+            abortHeightTransfer(fpp, "desired state changed", false)
+            runtime.heightApplied = not desiredApplied
+            transfer.heldVisualOverride = heldVisualPitch
         else
             -- A pitch bound only blocks motion on one side. Any motion that made
             -- it through since our previous command is real player input, so move
@@ -817,6 +823,11 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
                 -- camera merely because a seamless native transfer was impossible.
                 runtime.heightApplied = false
                 transfer.retryRemaining = 0.0
+                if fpp then
+                    pcall(function()
+                        fpp:ResetPitch()
+                    end)
+                end
                 Helpers.Log(
                     "native pitch handoff unavailable; height forced off: "
                         .. tostring(reason)
@@ -1780,12 +1791,13 @@ function CameraCore.Update(delta, context)
     maintainInputUnlock(fpp)
     updateHeightEligibility(context, elapsedDelta)
 
-    if not context.heightCanTransfer
+    if not context.heightCanPreserveTransition
         and (runtime.heightApplied == true
             or runtime.heightTransfer.active
             or runtime.heightPitchFloor.active) then
-        -- Staged scenes, workspots, vehicles, and other special contexts should
-        -- never inherit the pitch offset used to create the height adjustment.
+        -- Truly incompatible cameras must never inherit the height offset. The
+        -- less destructive held-pitch exit below is reserved for ordinary
+        -- on-foot transitions where the FPP parent remains meaningful.
         CameraCore.ResetHeightAdjustment("height context invalid")
     end
 
@@ -1811,7 +1823,14 @@ function CameraCore.Update(delta, context)
         return
     end
 
-    if not context.bodyEligible and not context.heightCanTransfer then
+    local preservingHeightTransition = context.heightCanPreserveTransition
+        and not context.heightCanTransfer
+        and (runtime.heightApplied == true
+            or runtime.heightTransfer.active
+            or runtime.heightPitchFloor.active)
+    if not context.bodyEligible
+        and not context.heightCanTransfer
+        and not preservingHeightTransition then
         CameraCore.Suspend("camera context invalid")
         return
     end
@@ -1839,6 +1858,18 @@ function CameraCore.Update(delta, context)
     runtime.nativePitch = nativePitch
     updateHeightTransfer(fpp, nativePitch, context, elapsedDelta)
     updateHeightPitchFloor(fpp, context.heightPitch)
+    if not context.bodyEligible
+        and not context.heightCanTransfer
+        and runtime.heightApplied ~= true
+        and not runtime.heightTransfer.active then
+        -- The transition-safe height exit has completed. Release ownership now;
+        -- unlike Suspend(), this does not reset the native pitch we just moved
+        -- into the held visual orientation.
+        restoreHeightPitchFloor(fpp)
+        releaseCamera(fpp)
+        setMode(MODE.SUSPENDED, "height transition preserved")
+        return
+    end
     if runtime.pendingFreeLook and not runtime.heightTransfer.active then
         runtime.pendingFreeLook = false
         if context.freeEligible and CameraCore.BeginFreeLook(context) then

@@ -50,6 +50,19 @@ local function buildCameraContext()
     local sceneTier = Helpers.GetSceneTier()
     local hasWeapon = Helpers.HasWeapon()
     local commonEligible = isEnabled and commonCameraContextAllowed(sceneTier)
+    -- Some ordinary on-foot transitions temporarily fail the stricter camera
+    -- context (notably knockdown/landing and traversal workspots). The height
+    -- hack may still perform its brief visual-pitch-preserving exit there. Truly
+    -- incompatible cameras such as vehicles, swimming, takedowns, and staged
+    -- scenes continue to use the hard safety reset.
+    local heightTransitionEligible = isEnabled
+        and sceneTier > 0
+        and sceneTier < 3
+        and not Helpers.IsInVehicle()
+        and not Helpers.IsSwimming()
+        and Helpers.IsTakingDown() <= 0
+        and not Helpers.IsCarryingBody()
+        and not blockingThirdPartyMods()
     local heightContextEligible = commonEligible
         and sceneTier == 1
         and (not Helpers.IsInWorkspot() or Helpers.IsOnLadder())
@@ -61,6 +74,7 @@ local function buildCameraContext()
         freeEligible = commonEligible and (not hasWeapon or Config.inner.freeLookInCombat),
         heightEligible = heightEligible,
         heightCanTransfer = heightContextEligible,
+        heightCanPreserveTransition = heightTransitionEligible,
         heightResetAllowed = heightContextEligible and not hasWeapon,
         -- Keep the requested bias available while ineligible so CameraCore can
         -- transfer it into/out of native pitch during weapon transitions.
