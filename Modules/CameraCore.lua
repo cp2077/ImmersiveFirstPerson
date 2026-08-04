@@ -26,6 +26,8 @@ local HEIGHT_TRANSFER_TIMEOUT = HEIGHT_TRANSFER_DURATION + 0.30
 local HEIGHT_TRANSFER_TOLERANCE = 0.15
 local HEIGHT_ENABLE_SETTLE_DURATION = 0.25
 local HEIGHT_TRANSFER_RETRY_DELAY = 0.75
+local HEIGHT_BLEND_OUT_DURATION = 0.08
+local HEIGHT_BLEND_IN_DURATION = 0.20
 local BODY_WEAPON_FADE_OUT_DURATION = 0.08
 local BODY_WEAPON_FADE_IN_DURATION = 0.25
 local FIXED_FOV_POSITION_COMPENSATION = 0.70
@@ -59,6 +61,13 @@ local runtime = {
     heightPitch = 0,
     heightApplied = nil,
     heightEligibilityElapsed = 0.0,
+    heightBlend = nil,
+    heightBlendTransition = {
+        active = false,
+        elapsed = 0.0,
+        from = 0.0,
+        target = 0.0,
+    },
     pendingFreeLook = false,
     heightPitchFloor = {
         active = false,
@@ -624,6 +633,63 @@ local function updateBodyBlend(context, delta)
 
     runtime.bodyContextEligible = contextEligible
     runtime.bodyWeaponBlocked = weaponBlocked
+end
+
+local function setHeightBlendImmediate(target)
+    local transition = runtime.heightBlendTransition
+    runtime.heightBlend = clamp(target, 0.0, 1.0)
+    transition.active = false
+    transition.elapsed = 0.0
+    transition.from = runtime.heightBlend
+    transition.target = runtime.heightBlend
+end
+
+local function resetHeightBlendTracking()
+    runtime.heightBlend = nil
+    runtime.heightBlendTransition.active = false
+    runtime.heightBlendTransition.elapsed = 0.0
+    runtime.heightBlendTransition.from = 0.0
+    runtime.heightBlendTransition.target = 0.0
+end
+
+local function updateHeightBlend(context, delta)
+    local desiredApplied = context.heightDesiredApplied == true
+    local target = desiredApplied and 1.0 or 0.0
+    local transition = runtime.heightBlendTransition
+
+    if runtime.heightBlend == nil then
+        setHeightBlendImmediate(target)
+    elseif target ~= transition.target then
+        transition.active = true
+        transition.elapsed = 0.0
+        transition.from = runtime.heightBlend
+        transition.target = target
+        Helpers.Log(desiredApplied
+            and "local height restore started"
+            or "local height release started")
+    end
+
+    runtime.heightApplied = desiredApplied
+    if not transition.active then
+        return
+    end
+
+    local duration = transition.target > transition.from
+        and HEIGHT_BLEND_IN_DURATION
+        or HEIGHT_BLEND_OUT_DURATION
+    transition.elapsed = math.min(
+        transition.elapsed + math.max(tonumber(delta) or 0.0, 0.0),
+        duration
+    )
+    local progress = duration <= 0.0 and 1.0 or transition.elapsed / duration
+    runtime.heightBlend = transition.from
+        + (transition.target - transition.from) * smoothstep(progress)
+    if progress >= 1.0 then
+        setHeightBlendImmediate(transition.target)
+        Helpers.Log(desiredApplied
+            and "local height restore completed"
+            or "local height release completed")
+    end
 end
 
 function CameraCore.EvaluateHeightPitch(nativePitch, maximumBias)
@@ -1691,7 +1757,7 @@ local function composeAndWrite(fpp, context, delta)
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
         local floor = runtime.pitchFloor or Vars.FREELOOK.DEFAULT_PITCH_FLOOR
         local ceiling = runtime.pitchCeiling or Vars.FREELOOK.DEFAULT_PITCH_CEILING
-        local appliedHeightBias = runtime.heightApplied and context.heightPitch or 0.0
+        local appliedHeightBias = 0.0
         local effectiveFloor = nativePitchForVisualPitch(floor, appliedHeightBias)
         local effectiveCeiling = nativePitchForVisualPitch(ceiling, appliedHeightBias)
         -- `freePitch` emulates native parent pitch, but the limits belong to the
@@ -1713,9 +1779,9 @@ local function composeAndWrite(fpp, context, delta)
         effectiveNativePitch = virtualBasePitch + runtime.freePitch
     end
 
-    -- During freelook the real parent is frozen, so drive the height adjustment
-    -- from the emulated native pitch as well.
-    runtime.heightPitch = evaluateAppliedHeightPitch(effectiveNativePitch, context)
+    -- Height is positional only. Never counter-pitch the local camera or move the
+    -- native parent just to change apparent eye height.
+    runtime.heightPitch = 0.0
     local visualEffectivePitch = effectiveNativePitch + runtime.heightPitch
     local bodyDriverPitch = visualEffectivePitch
     local body = CameraCore.EvaluateBody(
@@ -1789,6 +1855,22 @@ local function composeAndWrite(fpp, context, delta)
     local positionRestore = evaluateHeightPositionRestore(visualEffectivePitch)
     bodySpaceMotion.vertical = bodySpaceMotion.vertical
         + (visualPosition.vertical - nativePosition.vertical) * positionRestore
+    local heightBlend = clamp(tonumber(runtime.heightBlend) or 0.0, 0.0, 1.0)
+    if heightBlend > 0.0 then
+        -- Reproduce the old native-bias feature's final vertical lift without
+        -- actually rotating the native parent. The offset is authored in body
+        -- space and converted below, so its transition is strictly vertical in
+        -- the world instead of briefly pitching by the configured amount.
+        local biasedNativePitch = nativePitchForVisualPitch(
+            visualEffectivePitch,
+            context.heightPitch
+        )
+        local biasedPosition = NativeCameraCurve.Evaluate(biasedNativePitch)
+        local directHeight = (biasedPosition.vertical - visualPosition.vertical)
+            * (1.0 - positionRestore)
+            * heightBlend
+        bodySpaceMotion.vertical = bodySpaceMotion.vertical + directHeight
+    end
 
     if context.hasWeapon
         and (runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING) then
@@ -2167,11 +2249,11 @@ function CameraCore.Update(delta, context)
     maintainInputUnlock(fpp)
     updateHeightEligibility(context, elapsedDelta)
     updateBodyBlend(context, elapsedDelta)
+    updateHeightBlend(context, elapsedDelta)
 
     if not context.heightCanPreserveTransition
-        and (runtime.heightApplied == true
-            or runtime.heightTransfer.active
-            or runtime.heightPitchFloor.active) then
+        and ((tonumber(runtime.heightBlend) or 0.0) > 0.0001
+            or runtime.heightBlendTransition.active) then
         -- Truly incompatible cameras must never inherit the height offset. The
         -- less destructive held-pitch exit below is reserved for ordinary
         -- on-foot transitions where the FPP parent remains meaningful.
@@ -2195,7 +2277,7 @@ function CameraCore.Update(delta, context)
                 fpp,
                 context.hasWeapon,
                 runtime.entryNativePitch,
-                runtime.heightApplied and context.heightPitch or 0.0
+                0.0
             )
         else
             updateReturn(elapsedDelta)
@@ -2206,9 +2288,8 @@ function CameraCore.Update(delta, context)
 
     local preservingHeightTransition = context.heightCanPreserveTransition
         and not context.heightCanTransfer
-        and (runtime.heightApplied == true
-            or runtime.heightTransfer.active
-            or runtime.heightPitchFloor.active)
+        and ((tonumber(runtime.heightBlend) or 0.0) > 0.0001
+            or runtime.heightBlendTransition.active)
     if not context.bodyContextEligible
         and not context.heightCanTransfer
         and not preservingHeightTransition then
@@ -2216,17 +2297,12 @@ function CameraCore.Update(delta, context)
         return
     end
 
-    if runtime.heightApplied == nil and not context.heightEligible then
-        runtime.heightApplied = false
-    end
-
     local bodyManaged = context.bodyEligible
         or runtime.bodyTransition.active
         or (tonumber(runtime.bodyBlend) or 0.0) > 0.0001
     local heightManaged = context.heightEligible
-        or runtime.heightApplied == true
-        or runtime.heightTransfer.active
-        or runtime.heightTransfer.boundProperty ~= nil
+        or (tonumber(runtime.heightBlend) or 0.0) > 0.0001
+        or runtime.heightBlendTransition.active
     if not bodyManaged and not heightManaged then
         restoreHeightPitchFloor(fpp)
         releaseCamera(fpp)
@@ -2241,44 +2317,33 @@ function CameraCore.Update(delta, context)
     end
 
     runtime.nativePitch = nativePitch
-    if updateHeightTransfer(fpp, nativePitch, context, elapsedDelta) == false then
-        return
-    end
-    if not updateHeightPitchFloor(fpp, context.heightPitch) then
-        CameraCore.Yield("native pitch floor ownership unavailable")
-        return
-    end
     if not context.bodyEligible
         and not context.heightCanTransfer
-        and runtime.heightApplied ~= true
-        and not runtime.heightTransfer.active
-        and runtime.heightTransfer.boundProperty == nil
+        and (tonumber(runtime.heightBlend) or 0.0) <= 0.0001
+        and not runtime.heightBlendTransition.active
         and not bodyManaged then
-        -- The transition-safe height exit has completed. Release ownership now;
-        -- unlike Suspend(), this does not reset the native pitch we just moved
-        -- into the held visual orientation.
-        restoreHeightPitchFloor(fpp)
+        -- The local height fade has completed, so the authored camera can take
+        -- ownership without inheriting any transform from this context.
         releaseCamera(fpp)
         setMode(MODE.SUSPENDED, "height transition preserved")
         return
     end
-    if runtime.pendingFreeLook and not runtime.heightTransfer.active then
+    if runtime.pendingFreeLook then
         runtime.pendingFreeLook = false
         if context.freeEligible and CameraCore.BeginFreeLook(context) then
             composeAndWrite(fpp, context, elapsedDelta)
             return
         end
     end
-    runtime.heightPitch = evaluateAppliedHeightPitch(nativePitch, context)
+    runtime.heightPitch = 0.0
     local visualPitch = nativePitch + runtime.heightPitch
     runtime.bodyProgress = normalizeBodyPitch(visualPitch)
     -- While the experiment is enabled, retain one baseline even where the bias
     -- reaches zero. Releasing and recapturing around that boundary causes visible
     -- one-frame transform chatter as native pitch fluctuates across the threshold.
     heightManaged = context.heightEligible
-        or runtime.heightApplied == true
-        or runtime.heightTransfer.active
-        or runtime.heightTransfer.boundProperty ~= nil
+        or (tonumber(runtime.heightBlend) or 0.0) > 0.0001
+        or runtime.heightBlendTransition.active
     if runtime.bodyProgress <= 0.0001 and not heightManaged then
         releaseCamera(fpp)
         setMode(MODE.NATIVE, "camera corrections inactive")
@@ -2323,6 +2388,7 @@ clearTransientCameraState = function(fpp)
     runtime.rawPitch = 0
     runtime.heightPitch = 0
     resetBodyBlendTracking()
+    resetHeightBlendTracking()
     runtime.pitchFloor = nil
     runtime.pitchCeiling = nil
     runtime.entryNativePitch = 0.0
@@ -2366,8 +2432,7 @@ function CameraCore.Suspend(reason)
     local heightComponentToken = runtime.heightTransfer.componentToken
         or runtime.heightPitchFloor.componentToken
         or runtime.ownerComponentToken
-    local resetNativePitch = runtime.heightApplied == true
-        or runtime.heightTransfer.active
+    local resetNativePitch = runtime.heightTransfer.active
         or runtime.heightPitchFloor.active
     local canResetNativePitch = resetNativePitch
         and isSameComponent(fpp, heightComponentToken)
@@ -2393,9 +2458,7 @@ function CameraCore.Suspend(reason)
 end
 
 function CameraCore.ResetHeightAdjustment(reason)
-    -- UI changes deliberately return the visible camera to level first. The
-    -- regular height handoff then transfers the new amount into native pitch,
-    -- producing vertical movement without visibly pitching the view up or down.
+    -- Drop the previous local offset before adopting the newly configured amount.
     CameraCore.Suspend(reason or "height adjustment changed")
     runtime.heightApplied = false
 end
@@ -2576,6 +2639,8 @@ function CameraCore.GetDebugState()
         bodyTransitionActive = runtime.bodyTransition.active,
         heightPitch = runtime.heightPitch,
         heightApplied = runtime.heightApplied,
+        heightBlend = runtime.heightBlend,
+        heightBlendTransitionActive = runtime.heightBlendTransition.active,
         heightEligibilityElapsed = runtime.heightEligibilityElapsed,
         heightTransferActive = runtime.heightTransfer.active,
         heightTransferTarget = runtime.heightTransfer.targetNativePitch,
