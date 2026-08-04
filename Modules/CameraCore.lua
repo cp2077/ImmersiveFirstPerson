@@ -44,8 +44,19 @@ local HEIGHT_ENABLE_PROBE_STEP = 0.10
 local HEIGHT_ENABLE_PROBE_STABLE_FRAMES = 2
 local HEIGHT_ENABLE_PROBE_ORIENTATION_DOT = 0.9999998
 local HEIGHT_ENABLE_PROBE_LOG_DELAY = 0.50
-local BODY_WEAPON_FADE_OUT_DURATION = 0.08
+local BODY_WEAPON_FADE_OUT_DURATION = 0.00
 local BODY_WEAPON_FADE_IN_DURATION = 0.25
+-- Empty-hands state arrives before the outgoing weapon camera has necessarily
+-- stopped rewriting the component-local transform. A neutral write is not a
+-- useful ownership test because the weapon camera can replace it with the same
+-- value. Apply an imperceptible but distinguishable local pitch, require it to
+-- survive twice, then continue verifying every visible fade frame. Otherwise the
+-- 250 ms holster fade can elapse behind the weapon camera and appear as one jump.
+local BODY_HOLSTER_PROBE_PITCH = -0.10
+local BODY_HOLSTER_PROBE_STABLE_FRAMES = 2
+local BODY_HOLSTER_PROBE_POSITION_TOLERANCE = 0.0005
+local BODY_HOLSTER_PROBE_ORIENTATION_DOT = 0.9999998
+local BODY_HOLSTER_PROBE_LOG_DELAY = 0.50
 local FIXED_FOV_POSITION_COMPENSATION = 0.70
 
 local runtime = {
@@ -64,6 +75,12 @@ local runtime = {
         elapsed = 0.0,
         from = 0.0,
         target = 0.0,
+        waitingForCamera = false,
+        probeWritten = false,
+        probeStableFrames = 0,
+        probeElapsed = 0.0,
+        probeWaitLogged = false,
+        probeRejectedWrites = 0,
     },
     heightPitch = 0,
     heightApplied = nil,
@@ -482,6 +499,12 @@ local function setBodyBlendImmediate(target)
     transition.elapsed = 0.0
     transition.from = target
     transition.target = target
+    transition.waitingForCamera = false
+    transition.probeWritten = false
+    transition.probeStableFrames = 0
+    transition.probeElapsed = 0.0
+    transition.probeWaitLogged = false
+    transition.probeRejectedWrites = 0
 end
 
 local function resetBodyBlendTracking()
@@ -490,9 +513,26 @@ local function resetBodyBlendTracking()
     runtime.bodyWeaponBlocked = nil
     runtime.bodyTransition.active = false
     runtime.bodyTransition.elapsed = 0.0
+    runtime.bodyTransition.waitingForCamera = false
+    runtime.bodyTransition.probeWritten = false
+    runtime.bodyTransition.probeStableFrames = 0
+    runtime.bodyTransition.probeElapsed = 0.0
+    runtime.bodyTransition.probeWaitLogged = false
+    runtime.bodyTransition.probeRejectedWrites = 0
 end
 
-local function updateBodyBlend(context, delta)
+local function rebaseBodyProbeToLiveCamera(fpp, position, orientation)
+    if not runtime.ownsCamera or not runtime.baseline then
+        return
+    end
+
+    runtime.baseline.position = vectorCopy(position)
+    runtime.baseline.orientation = quaternionCopy(orientation)
+    runtime.baseline.fov = Helpers.GetFOV(fpp) or runtime.baseline.fov
+    runtime.lastApplied = nil
+end
+
+local function updateBodyBlend(fpp, context, delta)
     local contextEligible = context.bodyContextEligible == true
     local weaponBlocked = context.bodyWeaponBlocked == true
     local target = context.bodyEligible and 1.0 or 0.0
@@ -512,12 +552,92 @@ local function updateBodyBlend(context, delta)
             transition.elapsed = 0.0
             transition.from = runtime.bodyBlend
             transition.target = target
+            -- A normal holster starts from fully native camera state. Probe only
+            -- that edge; a rapid reversal while a fade is already visible should
+            -- continue smoothly from its current blend instead of pausing.
+            transition.waitingForCamera = target > transition.from
+                and transition.from <= 0.0001
+            transition.probeWritten = false
+            transition.probeStableFrames = 0
+            transition.probeElapsed = 0.0
+            transition.probeWaitLogged = false
+            transition.probeRejectedWrites = 0
+            Helpers.Log((
+                "body weapon fade started: %.2f -> %.2f over %.0f ms"
+            ):format(
+                transition.from,
+                transition.target,
+                (target > transition.from
+                    and BODY_WEAPON_FADE_IN_DURATION
+                    or BODY_WEAPON_FADE_OUT_DURATION) * 1000.0
+            ))
         else
             setBodyBlendImmediate(target)
         end
     end
 
-    if transition.active then
+    local fadeInWriteRetained = false
+    if transition.active
+        and transition.target > transition.from
+        and transition.probeWritten
+        and runtime.lastApplied then
+        local position = fpp:GetLocalPosition()
+        local orientation = fpp:GetLocalOrientation()
+        if position and orientation then
+            local appliedPosition = runtime.lastApplied.position
+            local positionDelta = math.abs(position.x - appliedPosition.x)
+                + math.abs(position.y - appliedPosition.y)
+                + math.abs(position.z - appliedPosition.z)
+            local appliedOrientation = runtime.lastApplied.orientation
+            local retainedDot = math.abs(
+                orientation.i * appliedOrientation.i
+                    + orientation.j * appliedOrientation.j
+                    + orientation.k * appliedOrientation.k
+                    + orientation.r * appliedOrientation.r
+            )
+            if positionDelta <= BODY_HOLSTER_PROBE_POSITION_TOLERANCE
+                and retainedDot >= BODY_HOLSTER_PROBE_ORIENTATION_DOT then
+                fadeInWriteRetained = true
+                if transition.waitingForCamera then
+                    transition.probeStableFrames = transition.probeStableFrames + 1
+                end
+            else
+                -- The outgoing profile replaced either the fixed probe or a
+                -- visible fade step. Adopt that live native pose, return to the
+                -- tiny probe, and restart the complete fade only after it sticks.
+                transition.probeRejectedWrites = transition.probeRejectedWrites + 1
+                transition.waitingForCamera = true
+                transition.probeStableFrames = 0
+                transition.elapsed = 0.0
+                runtime.bodyBlend = transition.from
+                rebaseBodyProbeToLiveCamera(fpp, position, orientation)
+            end
+        end
+        transition.probeWritten = false
+    end
+
+    if transition.active and transition.waitingForCamera then
+        transition.probeElapsed = transition.probeElapsed
+            + math.max(tonumber(delta) or 0.0, 0.0)
+        if transition.probeStableFrames >= BODY_HOLSTER_PROBE_STABLE_FRAMES then
+            transition.waitingForCamera = false
+            transition.elapsed = 0.0
+            Helpers.Log((
+                "body holster camera ownership confirmed after %d overwritten writes; "
+                    .. "250 ms fade started"
+            ):format(transition.probeRejectedWrites))
+        else
+            if transition.probeElapsed >= BODY_HOLSTER_PROBE_LOG_DELAY
+                and not transition.probeWaitLogged then
+                transition.probeWaitLogged = true
+                Helpers.Log("body holster fade is waiting for the weapon camera to release")
+            end
+        end
+    end
+
+    local canAdvance = transition.target < transition.from
+        or fadeInWriteRetained
+    if transition.active and not transition.waitingForCamera and canAdvance then
         local duration = transition.target > transition.from
             and BODY_WEAPON_FADE_IN_DURATION
             or BODY_WEAPON_FADE_OUT_DURATION
@@ -531,6 +651,9 @@ local function updateBodyBlend(context, delta)
         runtime.bodyBlend = transition.from
             + (transition.target - transition.from) * smoothstep(progress)
         if progress >= 1.0 then
+            Helpers.Log((
+                "body weapon fade completed at %.2f"
+            ):format(transition.target))
             setBodyBlendImmediate(transition.target)
         end
     end
@@ -1713,9 +1836,13 @@ local function composeAndWrite(fpp, context)
     if runtime.mode == MODE.FREELOOK and runtime.entryNativeOrientation then
         orientationNativePitch = runtime.entryNativePitch
     end
+    local holsterProbePitch = runtime.bodyTransition.active
+        and runtime.bodyTransition.waitingForCamera
+        and BODY_HOLSTER_PROBE_PITCH
+        or 0.0
     local orientation = headLocalOrientation(
         orientationNativePitch,
-        runtime.heightPitch + runtime.bodyPitch + freeOffset.pitch,
+        runtime.heightPitch + runtime.bodyPitch + freeOffset.pitch + holsterProbePitch,
         effectiveNativePitch - orientationNativePitch,
         freeOffset.yaw,
         freeOffset.roll,
@@ -1751,6 +1878,10 @@ local function composeAndWrite(fpp, context)
         position = position,
         orientation = quaternionCopy(orientation),
     }
+    if runtime.bodyTransition.active
+        and runtime.bodyTransition.target > runtime.bodyTransition.from then
+        runtime.bodyTransition.probeWritten = true
+    end
     return true
 end
 
@@ -2010,7 +2141,7 @@ function CameraCore.Update(delta, context)
     local inputDelta = math.min(elapsedDelta, 0.10)
     maintainInputUnlock(fpp)
     updateHeightEligibility(context, elapsedDelta)
-    updateBodyBlend(context, elapsedDelta)
+    updateBodyBlend(fpp, context, elapsedDelta)
 
     if not context.heightCanPreserveTransition
         and (runtime.heightApplied == true
