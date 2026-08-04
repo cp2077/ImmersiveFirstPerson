@@ -1,4 +1,4 @@
-local ImmersiveFirstPerson = { version = "2.0.0" }
+local ImmersiveFirstPerson = { version = "0.0.0-dev" }
 local CameraCore = require("Modules/CameraCore")
 local Config = require("Modules/Config")
 local GameSession = require("Modules/GameSession")

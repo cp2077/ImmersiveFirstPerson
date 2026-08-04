@@ -41,18 +41,6 @@ jobs:
               raise SystemExit(f"Release tag must be stable SemVer in the form vMAJOR.MINOR.PATCH; got {tag!r}")
 
           version = tag[1:]
-          init_source = Path("init.lua").read_text(encoding="utf-8")
-          source_match = re.search(
-              r'local\s+ImmersiveFirstPerson\s*=\s*\{\s*version\s*=\s*"([^"]+)"\s*\}',
-              init_source,
-          )
-          if not source_match:
-              raise SystemExit("Could not read the mod version from init.lua")
-          if source_match.group(1) != version:
-              raise SystemExit(
-                  f"Release tag version {version!r} does not match init.lua version {source_match.group(1)!r}"
-              )
-
           body = os.environ.get("RELEASE_BODY", "").replace("\r\n", "\n").strip()
           sections = re.split(r"(?m)^[ \t]*##[ \t]+Changelog[ \t]*$", body, maxsplit=1)
           if len(sections) != 2:
@@ -108,18 +96,30 @@ jobs:
 
       - name: Package the mod
         shell: bash
+        env:
+          MOD_VERSION: ${{ steps.release.outputs.version }}
         run: |
           bash bundle.sh
-          unzip -t "build/Immersive First Person.zip"
 
+          archive="build/Immersive First Person.zip"
           archive_root="bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerson/"
+          archive_init="${archive_root}init.lua"
+
+          unzip -t "$archive"
+
+          packaged_version_count=$(unzip -p "$archive" "$archive_init" | grep -Fc "version = \"$MOD_VERSION\"" || true)
+          [[ "$packaged_version_count" -eq 1 ]] || {
+            echo "Expected packaged init.lua to contain version $MOD_VERSION exactly once; found $packaged_version_count" >&2
+            exit 1
+          }
+
           while IFS= read -r entry; do
             [[ "$entry" == */ ]] && continue
             case "$entry" in
               "${archive_root}init.lua"|"${archive_root}Modules/"*.lua) ;;
               *) echo "Unexpected archive entry: $entry" >&2; exit 1 ;;
             esac
-          done < <(unzip -Z1 "build/Immersive First Person.zip")
+          done < <(unzip -Z1 "$archive")
 
       - name: Upload the release to Nexus Mods
         uses: Nexus-Mods/upload-action@c96019556046053aa26044b44396cd38929daf23 # v1.0.0-beta.10
