@@ -1,0 +1,139 @@
+name: Publish to Nexus Mods
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish release to Nexus Mods
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the released version
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Validate release metadata
+        id: release
+        shell: bash
+        env:
+          RELEASE_BODY: ${{ github.event.release.body }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python3 <<'PY'
+          import os
+          import re
+          import uuid
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"].strip()
+          tag_match = re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag)
+          if not tag_match:
+              raise SystemExit(f"Release tag must be stable SemVer in the form vMAJOR.MINOR.PATCH; got {tag!r}")
+
+          version = tag[1:]
+          init_source = Path("init.lua").read_text(encoding="utf-8")
+          source_match = re.search(
+              r'local\s+ImmersiveFirstPerson\s*=\s*\{\s*version\s*=\s*"([^"]+)"\s*\}',
+              init_source,
+          )
+          if not source_match:
+              raise SystemExit("Could not read the mod version from init.lua")
+          if source_match.group(1) != version:
+              raise SystemExit(
+                  f"Release tag version {version!r} does not match init.lua version {source_match.group(1)!r}"
+              )
+
+          body = os.environ.get("RELEASE_BODY", "").replace("\r\n", "\n").strip()
+          sections = re.split(r"(?m)^[ \t]*##[ \t]+Changelog[ \t]*$", body, maxsplit=1)
+          if len(sections) != 2:
+              raise SystemExit("Release notes must contain a '## Changelog' heading")
+
+          description_section, changelog = (section.strip() for section in sections)
+          description_paragraphs = [
+              paragraph.strip()
+              for paragraph in re.split(r"\n[ \t]*\n", description_section)
+              if paragraph.strip()
+          ]
+          if len(description_paragraphs) != 1:
+              raise SystemExit("Put exactly one short paragraph before the '## Changelog' heading")
+
+          description = " ".join(description_paragraphs[0].split())
+          if not description:
+              raise SystemExit("The short file description must not be empty")
+          if len(description) > 255:
+              raise SystemExit(
+                  f"The short file description is {len(description)} characters; Nexus allows at most 255"
+              )
+          if not changelog:
+              raise SystemExit("The Nexus changelog must not be empty")
+          if len(changelog) > 65535:
+              raise SystemExit(
+                  f"The Nexus changelog is {len(changelog)} characters; Nexus allows at most 65535"
+              )
+
+          def write_output(name: str, value: str) -> None:
+              delimiter = f"nexus_{uuid.uuid4().hex}"
+              with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+                  output.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
+
+          write_output("version", version)
+          write_output("description", description)
+          write_output("changelog", changelog)
+
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
+              summary.write(f"Validated Nexus release **{version}**.\n\n")
+              summary.write(f"File description: {description}\n")
+          PY
+
+      - name: Validate Nexus configuration
+        shell: bash
+        env:
+          NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+          NEXUSMODS_FILE_ID: ${{ vars.NEXUSMODS_FILE_ID }}
+          NEXUSMODS_MOD_ID: ${{ vars.NEXUSMODS_MOD_ID }}
+        run: |
+          [[ -n "$NEXUSMODS_API_KEY" ]] || { echo "Missing repository secret NEXUSMODS_API_KEY" >&2; exit 1; }
+          [[ -n "$NEXUSMODS_FILE_ID" ]] || { echo "Missing repository variable NEXUSMODS_FILE_ID" >&2; exit 1; }
+          [[ -n "$NEXUSMODS_MOD_ID" ]] || { echo "Missing repository variable NEXUSMODS_MOD_ID" >&2; exit 1; }
+
+      - name: Package the mod
+        shell: bash
+        run: |
+          bash bundle.sh
+          unzip -t "build/Immersive First Person.zip"
+
+          archive_root="bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerson/"
+          while IFS= read -r entry; do
+            [[ "$entry" == */ ]] && continue
+            case "$entry" in
+              "${archive_root}init.lua"|"${archive_root}Modules/"*.lua) ;;
+              *) echo "Unexpected archive entry: $entry" >&2; exit 1 ;;
+            esac
+          done < <(unzip -Z1 "build/Immersive First Person.zip")
+
+      - name: Upload the release to Nexus Mods
+        uses: Nexus-Mods/upload-action@c96019556046053aa26044b44396cd38929daf23 # v1.0.0-beta.10
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ vars.NEXUSMODS_FILE_ID }}
+          filename: build/Immersive First Person.zip
+          display_name: Immersive First Person
+          description: ${{ steps.release.outputs.description }}
+          version: ${{ steps.release.outputs.version }}
+          category: main
+          archive_existing_version: false
+          primary_mod_manager_download: true
+          allow_mod_manager_download: true
+          update_mod_version: true
+          mod_id: ${{ vars.NEXUSMODS_MOD_ID }}
+          changelog: ${{ steps.release.outputs.changelog }}
