@@ -7,7 +7,6 @@
 #include <RED4ext/Scripting/Natives/Generated/ent/AnimatedComponent.hpp>
 #include <RED4ext/Scripting/Natives/Generated/game/Puppet.hpp>
 
-#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -26,7 +25,6 @@ enum class HeightGraphStatus : int32_t
 
 RED4ext::v1::PluginHandle s_pluginHandle;
 const RED4ext::v1::Logger* s_logger = nullptr;
-std::atomic<bool> s_headLookAtEnabled{false};
 
 void LogInfo(const std::string& aMessage)
 {
@@ -145,28 +143,6 @@ void GetHeightGraphStatus(RED4ext::IScriptable* aContext, RED4ext::CStackFrame* 
     }
 }
 
-void SetHeadLookAtEnabled(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame,
-                          bool* aOut, int64_t)
-{
-    bool enabled = false;
-    RED4ext::GetParameter(aFrame, &enabled);
-    aFrame->code++;
-    s_headLookAtEnabled.store(enabled, std::memory_order_release);
-    if (aOut)
-    {
-        *aOut = true;
-    }
-}
-
-void IsHeadLookAtEnabled(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame,
-                         bool* aOut, int64_t)
-{
-    aFrame->code++;
-    if (aOut)
-    {
-        *aOut = s_headLookAtEnabled.load(std::memory_order_acquire);
-    }
-}
 } // namespace
 
 RED4EXT_C_EXPORT void RED4EXT_CALL RegisterTypes()
@@ -177,20 +153,8 @@ RED4EXT_C_EXPORT void RED4EXT_CALL PostRegisterTypes()
 {
     auto* rtti = RED4ext::CRTTISystem::Get();
 
-    // RED4ext validates the native declaration in LookAt.reds during startup.
-    // Register the global before any optional class lookup or early return.
-    {
-        auto* function = RED4ext::CGlobalFunction::Create(
-            "ImmersiveFirstPerson_IsHeadLookAtEnabled",
-            "ImmersiveFirstPerson_IsHeadLookAtEnabled",
-            &IsHeadLookAtEnabled);
-        function->flags = {.isNative = true, .isStatic = true};
-        function->SetReturnType("Bool");
-        rtti->RegisterFunction(function);
-    }
-
-    // CET calls these on V. Registering on gamePuppet avoids REDscript native
-    // method declarations and makes a missing plugin fail safely in Lua.
+    // CET calls this on V. Registering on gamePuppet avoids a REDscript native
+    // declaration and makes a missing or version-rejected plugin fail safely.
     auto* puppetClass = rtti->GetClass(RED4ext::game::Puppet::NAME);
     if (!puppetClass)
     {
@@ -212,19 +176,7 @@ RED4EXT_C_EXPORT void RED4EXT_CALL PostRegisterTypes()
         puppetClass->RegisterFunction(function);
     }
 
-    {
-        auto* function = RED4ext::CClassFunction::Create(
-            puppetClass,
-            "ImmersiveFirstPersonSetHeadLookAtEnabled",
-            "ImmersiveFirstPersonSetHeadLookAtEnabled",
-            &SetHeadLookAtEnabled);
-        function->flags = {.isNative = true};
-        function->AddParam("Bool", "enabled");
-        function->SetReturnType("Bool");
-        puppetClass->RegisterFunction(function);
-    }
-
-    LogInfo("Runtime height contract and look-at controls registered.");
+    LogInfo("Runtime height contract control registered.");
 }
 
 RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
@@ -241,7 +193,6 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
         LogInfo("Immersive First Person native plugin loaded.");
         break;
     case RED4ext::v1::EMainReason::Unload:
-        s_headLookAtEnabled.store(false, std::memory_order_release);
         break;
     }
     return true;
