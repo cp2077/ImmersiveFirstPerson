@@ -4,18 +4,19 @@ local Config = require("Modules/Config")
 local GameSession = require("Modules/GameSession")
 local Helpers = require("Modules/Helpers")
 local NativeCameraSampler = require("Modules/NativeCameraSampler")
+local RuntimeHeight = require("Modules/RuntimeHeight")
 
 local initialized = false
 local isLoaded = false
+local isPaused = false
 local isOverlayOpen = false
 local isEnabled = true
 local isDisabledByApi = false
-local heightResetPending = false
 local weaponCameraBlocked = false
 local weaponCameraClearElapsed = 0.0
 local lastCameraBlockReason = nil
 
-local HEIGHT_WEAPON_CLEAR_GRACE = 0.20
+local BODY_WEAPON_CLEAR_GRACE = 0.20
 
 local API = {}
 
@@ -79,6 +80,35 @@ local function getCameraBlockReason(state)
     return nil
 end
 
+local function getHeightSuppressionReason(state)
+    if state.sceneTier <= 0 or state.sceneTier >= 3 then
+        return "scripted scene"
+    elseif state.vitalsState ~= 0 then
+        return "player not alive"
+    elseif state.inVehicle or state.remoteVehicle then
+        return state.remoteVehicle and "remote vehicle" or "vehicle occupancy"
+    elseif state.deviceCamera then
+        return "device camera"
+    elseif state.inMinigame then
+        return "minigame"
+    elseif state.inspecting then
+        return "inspection"
+    elseif state.forceOpeningDoor then
+        return "forced-door interaction"
+    elseif state.takingDown then
+        return "takedown or grapple"
+    elseif state.carryingBody then
+        return "body carrying"
+    elseif state.felled or state.knockedDown then
+        return "knockdown or forced reaction"
+    elseif state.traversal then
+        return "climb, vault, or ladder"
+    elseif state.inWorkspot then
+        return "authored workspot"
+    end
+    return nil
+end
+
 local function logCameraBlockTransition(reason)
     if reason == lastCameraBlockReason then
         return
@@ -105,7 +135,7 @@ local function updateWeaponCameraBlock(hasWeapon, delta)
         else
             weaponCameraClearElapsed = weaponCameraClearElapsed
                 + math.max(tonumber(delta) or 0.0, 0.0)
-            if weaponCameraClearElapsed >= HEIGHT_WEAPON_CLEAR_GRACE then
+            if weaponCameraClearElapsed >= BODY_WEAPON_CLEAR_GRACE then
                 weaponCameraBlocked = false
                 weaponCameraClearElapsed = 0.0
             end
@@ -115,14 +145,17 @@ local function updateWeaponCameraBlock(hasWeapon, delta)
     return weaponCameraBlocked
 end
 
-local function buildCameraContext(delta)
+local function collectPlayerState()
     local sceneTier = Helpers.GetSceneTier()
     local hasWeapon = Helpers.HasWeapon()
     local isTakingDown = Helpers.IsTakingDown() > 0
-    local state = {
+    return {
         sceneTier = sceneTier,
+        hasWeapon = hasWeapon,
         vitalsState = Helpers.GetVitalsState(),
-        inVehicle = Helpers.GetVehicleState() ~= 0 or Helpers.IsInVehicle(),
+        inVehicle = Helpers.GetVehicleState() ~= 0
+            or Helpers.IsInVehicle()
+            or Helpers.HasMountedVehicle(),
         remoteVehicle = Helpers.HasRemoteControlledVehicle(),
         deviceCamera = Helpers.IsDeviceCameraActive(),
         inMinigame = Helpers.IsInMinigame(),
@@ -138,6 +171,11 @@ local function buildCameraContext(delta)
         inWorkspot = Helpers.IsInWorkspot(),
         knockedDown = Helpers.IsKnockedDown(),
     }
+end
+
+local function buildCameraContext(delta, state)
+    state = state or collectPlayerState()
+    local hasWeapon = state.hasWeapon
     local cameraBlockReason = getCameraBlockReason(state)
     logCameraBlockTransition(cameraBlockReason)
     -- The attachment slot can disappear while the ranged-weapon state machine
@@ -147,40 +185,6 @@ local function buildCameraContext(delta)
     local blocksCameraForWeapon = updateWeaponCameraBlock(reportsArmed, delta)
     local commonEligible = isEnabled
         and cameraBlockReason == nil
-    -- Height has narrower incompatibilities than the body/freelook camera. Base
-    -- locomotion keeps the same FPP parent through jumps, falls, hard landings,
-    -- ordinary knockdowns, climbing, and vaulting, so retaining the correction
-    -- is safer than repeatedly transferring it out and back in. Explicit Felled
-    -- and external-camera states are excluded because they replace that owner.
-    local heightCameraCompatible = isEnabled
-        and sceneTier == 1
-        and state.vitalsState == 0
-        and not state.inVehicle
-        and not state.remoteVehicle
-        and not state.deviceCamera
-        and not state.inMinigame
-        and not state.inspecting
-        and not state.forceOpeningDoor
-        and not state.carryingBody
-        and not state.felled
-        and not blockingThirdPartyMods()
-    -- A takedown remains "compatible" only long enough to transfer the hidden
-    -- pitch back while holding the visible view; actual height composition is
-    -- disabled before the authored takedown camera takes ownership.
-    -- Keep height disabled for the complete swimming high-level state. The
-    -- hidden native pitch bias can affect REDengine's pitch-driven dive rules.
-    -- Ladders are also excluded: their Enter/Default/Reset/Exit profiles replace
-    -- pitchMin with a centred floor, and adding height bias to that floor forces
-    -- the camera upward. Vault and non-ladder climb states remain supported.
-    local heightContextEligible = heightCameraCompatible
-        and not isTakingDown
-        and not state.swimming
-        and not state.onLadder
-        and state.consumableState == 0
-        and (not state.inWorkspot or state.traversal)
-    local heightEligible = heightContextEligible
-        and Config.inner.heightAdjustmentEnabled
-        and not blocksCameraForWeapon
     return {
         -- Weapon draw/holster retains the ordinary FPP parent, so CameraCore may
         -- crossfade the additive body correction. Truly incompatible contexts
@@ -193,13 +197,6 @@ local function buildCameraContext(delta)
         -- freelook can strand REDengine's pitch floor at the centre afterward.
         freeEligible = commonEligible
             and (not hasWeapon or Config.inner.freeLookInCombat),
-        heightEligible = heightEligible,
-        heightCanTransfer = heightContextEligible,
-        heightCanPreserveTransition = heightCameraCompatible,
-        heightResetAllowed = heightContextEligible and not blocksCameraForWeapon,
-        -- Keep the requested bias available while ineligible so CameraCore can
-        -- transfer it into/out of native pitch during weapon transitions.
-        heightPitch = Config.inner.heightAdjustmentAmount,
         crouching = Helpers.IsCrouching(),
         hasWeapon = hasWeapon,
     }
@@ -212,25 +209,41 @@ end
 local function setSessionLoaded(loaded, reason)
     isLoaded = loaded
     if loaded then
+        isPaused = false
         refreshInputSettings()
+        RuntimeHeight.MarkDirty()
     else
-        lastCameraBlockReason = nil
-        if reason == "game paused" then
-            CameraCore.Pause(reason)
-        else
-            CameraCore.Suspend(reason)
+        isPaused = false
+        if initialized then
+            RuntimeHeight.Shutdown(Game.GetPlayer())
         end
+        lastCameraBlockReason = nil
+        CameraCore.Suspend(reason)
+    end
+end
+
+local function setSessionPaused(paused, reason)
+    isPaused = paused == true
+    if isPaused then
+        -- A menu pauses camera ownership, but it is not a player/session exit.
+        -- Preserve the current animgraph height instead of blending it to zero.
+        CameraCore.Pause(reason or "game paused")
+    else
+        refreshInputSettings()
+        RuntimeHeight.MarkDirty()
     end
 end
 
 function API.Enable()
     isDisabledByApi = false
     isEnabled = true
+    RuntimeHeight.MarkDirty()
 end
 
 function API.Disable()
     isDisabledByApi = true
     isEnabled = false
+    RuntimeHeight.Shutdown(Game.GetPlayer())
     CameraCore.Suspend("disabled by API")
 end
 
@@ -240,6 +253,15 @@ end
 
 function API.GetCameraState()
     return CameraCore.GetDebugState()
+end
+
+function API.GetHeightState()
+    return {
+        available = RuntimeHeight.IsAvailable(),
+        status = RuntimeHeight.GetStatus(),
+        suppressedBy = RuntimeHeight.GetSuppressionReason(),
+        effectiveCentimeters = RuntimeHeight.GetEffectiveHeightCentimeters(),
+    }
 end
 
 local function tooltipIfHovered(text)
@@ -317,6 +339,8 @@ end
 function ImmersiveFirstPerson.Init()
     registerForEvent("onShutdown", function()
         isLoaded = false
+        isPaused = false
+        RuntimeHeight.Shutdown(Game.GetPlayer())
         if NativeCameraSampler.IsActive() then
             NativeCameraSampler.Cancel()
         end
@@ -345,7 +369,7 @@ function ImmersiveFirstPerson.Init()
             setSessionLoaded(true, "session started")
         end)
         GameSession.OnResume(function()
-            setSessionLoaded(true, "session resumed")
+            setSessionPaused(false, "session resumed")
         end)
         GameSession.OnEnd(function()
             setSessionLoaded(false, "session ended")
@@ -354,19 +378,40 @@ function ImmersiveFirstPerson.Init()
             setSessionLoaded(false, "player died")
         end)
         GameSession.OnPause(function()
-            setSessionLoaded(false, "game paused")
+            setSessionPaused(true, "game paused")
         end)
 
         -- GameSession callbacks describe transitions. On a hot reload there may be no
         -- transition, so adopt the state that GameSession discovered during registration.
-        local sessionActive = GameSession.IsLoaded()
-            and not GameSession.IsPaused()
-            and not GameSession.IsDead()
+        local sessionActive = GameSession.IsLoaded() and not GameSession.IsDead()
         setSessionLoaded(sessionActive, sessionActive and "CET initialized" or "no active session")
+        if sessionActive and GameSession.IsPaused() then
+            setSessionPaused(true, "game paused")
+        end
     end)
 
     registerForEvent("onUpdate", function(delta)
         if not initialized or not isLoaded then
+            return
+        end
+
+        local player = Game.GetPlayer()
+        local playerState = isPaused and nil or collectPlayerState()
+        local heightSuppressionReason
+        if isPaused then
+            heightSuppressionReason = RuntimeHeight.GetSuppressionReason()
+        else
+            heightSuppressionReason = getHeightSuppressionReason(playerState)
+        end
+        RuntimeHeight.Update(
+            delta,
+            player,
+            isEnabled,
+            Config.inner.heightAdjustmentAmount,
+            heightSuppressionReason
+        )
+
+        if isPaused then
             return
         end
 
@@ -376,13 +421,7 @@ function ImmersiveFirstPerson.Init()
             return
         end
 
-        local context = buildCameraContext(delta)
-        if heightResetPending and context.heightResetAllowed then
-            CameraCore.ResetHeightAdjustment("height setting changed")
-            heightResetPending = false
-            context = buildCameraContext(0.0)
-        end
-        CameraCore.Update(delta, context)
+        CameraCore.Update(delta, buildCameraContext(delta, playerState))
     end)
 
     registerForEvent("onDraw", function()
@@ -398,9 +437,22 @@ function ImmersiveFirstPerson.Init()
         if changed then
             if isEnabled then
                 isDisabledByApi = false
+                RuntimeHeight.MarkDirty()
             else
+                RuntimeHeight.Shutdown(Game.GetPlayer())
                 CameraCore.Suspend("disabled in overlay")
             end
+        end
+
+        Config.inner.debugLogging, changed = ImGui.Checkbox(
+            "Debug logging",
+            Config.inner.debugLogging
+        )
+        tooltipIfHovered(
+            "Controls routine diagnostic logs. Errors are still reported when disabled."
+        )
+        if changed then
+            Config.SaveConfig()
         end
 
         Config.inner.dontChangeFov, changed = ImGui.Checkbox(
@@ -454,36 +506,44 @@ function ImmersiveFirstPerson.Init()
         end
 
         ImGui.Separator()
-        ImGui.Text("Experimental")
-        Config.inner.heightAdjustmentEnabled, changed = ImGui.Checkbox(
-            "Enable height adjustment",
-            Config.inner.heightAdjustmentEnabled
-        )
-        tooltipIfHovered("Experimental apparent player-height adjustment.")
-        if changed then
-            Config.SaveConfig()
-            heightResetPending = true
-        end
-        if Config.inner.heightAdjustmentEnabled then
+        ImGui.Text("Height")
+        if RuntimeHeight.IsAvailable() then
             Config.inner.heightAdjustmentAmount, changed = ImGui.SliderInt(
-                "Height amount",
+                "Height increase",
                 math.floor(Config.inner.heightAdjustmentAmount),
-                1,
-                30
+                0,
+                RuntimeHeight.GetMaximumHeightCentimeters(),
+                "+%d cm"
             )
-            tooltipIfHovered("Higher values increase height and the chance of camera artifacts.")
+            tooltipIfHovered(
+                "Smoothly blends the optional full-height player animgraph. +0 cm turns it off."
+            )
             if changed then
                 Config.SaveConfig()
-                heightResetPending = true
+                RuntimeHeight.MarkDirty()
             end
+
+            if Config.inner.heightAdjustmentAmount > 8 then
+                ImGui.TextWrapped(
+                    "Above +8 cm is experimental: knees, authored contacts, and transitions may look wrong."
+                )
+            end
+            local suppressionReason = RuntimeHeight.GetSuppressionReason()
+            if Config.inner.heightAdjustmentAmount > 0 and suppressionReason then
+                ImGui.TextWrapped("Temporarily disabled: " .. suppressionReason)
+            end
+            ImGui.Text(("Effective height: +%.1f cm"):format(
+                RuntimeHeight.GetEffectiveHeightCentimeters()
+            ))
+        else
+            ImGui.TextDisabled("Height slider unavailable")
             ImGui.TextWrapped(
-                "Experimental: active only during normal on-foot gameplay with weapons "
-                    .. "holstered. Larger values may cause clipping, visual artifacts, "
-                    .. "or unusual mouse/camera movement."
+                "The optional height archive is not installed, is incompatible, or is overridden by another player animgraph."
             )
         end
 
         ImGui.Text("Camera state: " .. CameraCore.GetMode())
+        ImGui.TextWrapped("Height status: " .. RuntimeHeight.GetStatus())
         --[[ Native camera sampling UI is retained for future curve captures.
         ImGui.Text("Native camera sampler: " .. NativeCameraSampler.GetStatus())
         if NativeCameraSampler.IsActive() then
@@ -506,7 +566,9 @@ function ImmersiveFirstPerson.Init()
         isEnabled = not isEnabled
         if isEnabled then
             isDisabledByApi = false
+            RuntimeHeight.MarkDirty()
         else
+            RuntimeHeight.Shutdown(Game.GetPlayer())
             CameraCore.Suspend("disabled by hotkey")
         end
     end)
@@ -517,7 +579,7 @@ function ImmersiveFirstPerson.Init()
         end
 
         if keydown then
-            local context = buildCameraContext()
+            local context = buildCameraContext(nil, collectPlayerState())
             if context.freeEligible then
                 CameraCore.BeginFreeLook(context)
             end

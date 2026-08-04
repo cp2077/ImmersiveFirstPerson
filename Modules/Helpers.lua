@@ -1,10 +1,23 @@
 local Helpers = {}
+local debugLoggingEnabled = true
 
 function Helpers.PrintMsg(message)
     print("[ImmersiveFirstPerson] " .. tostring(message))
 end
 
+function Helpers.SetDebugLoggingEnabled(enabled)
+    debugLoggingEnabled = enabled == true
+end
+
+function Helpers.IsDebugLoggingEnabled()
+    return debugLoggingEnabled
+end
+
 function Helpers.Log(message)
+    if not debugLoggingEnabled then
+        return
+    end
+
     local text = "[ImmersiveFirstPerson] " .. tostring(message)
     print(text)
     if spdlog and spdlog.info then

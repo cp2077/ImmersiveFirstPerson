@@ -2,15 +2,31 @@
 set -euo pipefail
 
 mod_version="${MOD_VERSION:-0.0.0-dev}"
+native_dll="${NATIVE_DLL:-.dev/build/native/Release/ImmersiveFirstPerson.dll}"
+height_archive="${HEIGHT_ARCHIVE:-optional/ImmersiveFirstPersonHeight.archive}"
 if [[ "$mod_version" != "0.0.0-dev" && ! "$mod_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
     echo "MOD_VERSION must be stable SemVer or 0.0.0-dev; got '$mod_version'" >&2
     exit 1
 fi
 
+if [[ ! -f "$native_dll" ]]; then
+    echo "Native DLL was not found at '$native_dll'; run .dev/build-native.ps1 or set NATIVE_DLL" >&2
+    exit 1
+fi
+native_dll="$(realpath "$native_dll")"
+
+if [[ ! -f "$height_archive" ]]; then
+    echo "Optional height archive was not found at '$height_archive'; set HEIGHT_ARCHIVE" >&2
+    exit 1
+fi
+height_archive="$(realpath "$height_archive")"
+
 rm -rf build
 mkdir build
 cd build
 mkdir -p bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerson/
+mkdir -p red4ext/plugins/ImmersiveFirstPerson/
+mkdir -p r6/scripts/ImmersiveFirstPerson/
 staged_init="bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerson/init.lua"
 cp ../init.lua "$staged_init"
 
@@ -26,5 +42,12 @@ if [[ "$mod_version" != "0.0.0-dev" ]]; then
 fi
 
 cp -r ../Modules bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerson/
-zip -r "Immersive First Person.zip" bin
-rm -rf bin
+cp "$native_dll" red4ext/plugins/ImmersiveFirstPerson/ImmersiveFirstPerson.dll
+cp ../r6/scripts/ImmersiveFirstPerson/LookAt.reds r6/scripts/ImmersiveFirstPerson/LookAt.reds
+zip -r "Immersive First Person.zip" bin red4ext r6
+rm -rf bin red4ext r6
+
+mkdir -p archive/pc/mod
+cp "$height_archive" archive/pc/mod/ImmersiveFirstPersonHeight.archive
+zip -r "Immersive First Person - Optional Height.zip" archive
+rm -rf archive

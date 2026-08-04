@@ -3,13 +3,13 @@ local Vars = require("Modules/Vars")
 
 local defaults = {
     version = Vars.CONFIG_VERSION,
+    debugLogging = true,
     freeLookSensitivity = Vars.FREELOOK.DEFAULT_SENSITIVITY,
     smoothRestore = false,
     smoothRestoreSpeed = 15,
     freeLookInCombat = true,
     dontChangeFov = false,
-    heightAdjustmentEnabled = false,
-    heightAdjustmentAmount = 8,
+    heightAdjustmentAmount = 0,
 }
 
 local Config = {
@@ -78,6 +78,33 @@ local function migrate(config)
         config.freeLookInCombat = true
     end
 
+    if previousVersion < 4 then
+        -- Version 3 stored a pitch angle, while version 4 stores centimetres and
+        -- controls different native systems. Do not reinterpret a value such as
+        -- 30 degrees as an unsafe 30 cm increase on first launch.
+        config.heightAdjustmentEnabled = false
+        config.heightAdjustmentAmount = defaults.heightAdjustmentAmount
+    end
+
+    if previousVersion < 5 then
+        -- Version 5 replaces the collection of native mutation experiments with
+        -- one optional, versioned animgraph whose slider value is the complete
+        -- height setting. Preserve an explicitly enabled v4 amount; otherwise
+        -- migrate to the safe +0 cm default.
+        if config.heightAdjustmentEnabled ~= true then
+            config.heightAdjustmentAmount = 0
+        end
+    end
+
+    config.heightAdjustmentEnabled = nil
+    config.heightAnimationEnabled = nil
+    config.heightHumanoidEnabled = nil
+    config.heightCapsuleEnabled = nil
+    config.heightSlotFallbackEnabled = nil
+    config.heightRigCameraEnabled = nil
+    config.heightRigBodyEnabled = nil
+    config.heightRigProportionsEnabled = nil
+
     config.version = Vars.CONFIG_VERSION
     return config
 end
@@ -92,13 +119,13 @@ local function validate(config)
 
     result.freeLookSensitivity = clamp(tonumber(result.freeLookSensitivity) or defaults.freeLookSensitivity, 1, 100)
     result.smoothRestoreSpeed = clamp(tonumber(result.smoothRestoreSpeed) or defaults.smoothRestoreSpeed, 1, 200)
+    result.debugLogging = result.debugLogging == true
     result.smoothRestore = result.smoothRestore == true
     result.freeLookInCombat = result.freeLookInCombat == true
     result.dontChangeFov = result.dontChangeFov == true
-    result.heightAdjustmentEnabled = result.heightAdjustmentEnabled == true
     result.heightAdjustmentAmount = math.floor(clamp(
         tonumber(result.heightAdjustmentAmount) or defaults.heightAdjustmentAmount,
-        1,
+        0,
         30
     ) + 0.5)
     result.version = Vars.CONFIG_VERSION
@@ -148,6 +175,7 @@ end
 
 function Config.InitConfig()
     Config.inner = validate(migrate(readConfig() or copyDefaults()))
+    Helpers.SetDebugLoggingEnabled(Config.inner.debugLogging)
     Config.isReady = true
     writeConfig()
 end
@@ -155,6 +183,7 @@ end
 function Config.SaveConfig()
     if Config.isReady then
         Config.inner = validate(Config.inner)
+        Helpers.SetDebugLoggingEnabled(Config.inner.debugLogging)
         writeConfig()
     end
 end
