@@ -9,6 +9,8 @@ Body correction runs while looking down during normal unarmed gameplay. It suspe
 
 The mod does not replace `r6/config/settings/platform/pc/options.json` or change saved mouse sensitivity. Native camera input is locked only while the FreeLook input is held and is released immediately on key-up. The optional visual return uses elapsed time and does not hold native input.
 
+If another system repeatedly writes the same first-person camera transform or FOV, the mod suspends its camera changes for the current gameplay session instead of competing. The CET Overlay reports the conflict and provides a manual retry button; starting a new session clears the suspension automatically.
+
 ## Installation
 
 1. Install Cyber Engine Tweaks.

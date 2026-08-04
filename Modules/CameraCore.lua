@@ -11,6 +11,7 @@ local MODE = {
     FREELOOK = "freelook",
     RETURNING = "returning",
     SUSPENDED = "suspended",
+    CONFLICT = "conflict_suspended",
 }
 
 -- Experimental height adjustment. Keep its angular bias constant while looking
@@ -28,12 +29,21 @@ local HEIGHT_TRANSFER_RETRY_DELAY = 0.75
 local BODY_WEAPON_FADE_OUT_DURATION = 0.08
 local BODY_WEAPON_FADE_IN_DURATION = 0.25
 local FIXED_FOV_POSITION_COMPENSATION = 0.70
+local CAMERA_INTERFERENCE_DURATION = 0.50
+local CAMERA_REACQUIRE_DURATION = 0.25
+local CAMERA_POSITION_TOLERANCE = 0.002
+local CAMERA_ORIENTATION_DOT_TOLERANCE = 0.9995
+local CAMERA_FOV_TOLERANCE = 0.05
+local NATIVE_PROPERTY_TOLERANCE = 0.01
 
 local runtime = {
     mode = MODE.SUSPENDED,
     ownsCamera = false,
+    ownerComponentToken = nil,
     baseline = nil,
     lastApplied = nil,
+    frozen = false,
+    reacquireRemaining = 0.0,
     nativePitch = 0,
     bodyProgress = 0,
     bodyPitch = 0,
@@ -54,6 +64,7 @@ local runtime = {
         active = false,
         original = nil,
         applied = nil,
+        componentToken = nil,
         failureLogged = false,
     },
     heightTransfer = {
@@ -69,6 +80,7 @@ local runtime = {
         elapsed = 0.0,
         retryRemaining = 0.0,
         heldVisualOverride = nil,
+        componentToken = nil,
     },
     freeYaw = 0,
     freePitch = 0,
@@ -110,12 +122,20 @@ local runtime = {
         active = false,
         consumerActions = true,
     },
-    interferenceFrames = 0,
-    interferenceLogged = false,
+    interferenceElapsed = 0.0,
+    conflict = {
+        active = false,
+        reason = nil,
+        positionDelta = 0.0,
+        orientationDot = 1.0,
+        fovDelta = 0.0,
+    },
     freeLookParentDriftLogged = false,
     freeLookParentOrientationDriftLogged = false,
     freeLookLocalWriterLogged = false,
 }
+
+local clearTransientCameraState
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
@@ -123,6 +143,23 @@ end
 
 local function finite(value)
     return type(value) == "number" and value == value and value > -math.huge and value < math.huge
+end
+
+local function getComponentToken(fpp)
+    if not fpp then
+        return nil
+    end
+
+    local ok, token = pcall(tostring, fpp)
+    if not ok or type(token) ~= "string" or token == "" then
+        return nil
+    end
+    return token
+end
+
+local function isSameComponent(fpp, token)
+    local currentToken = getComponentToken(fpp)
+    return currentToken ~= nil and token ~= nil and currentToken == token
 end
 
 local function setMode(mode, reason)
@@ -178,6 +215,10 @@ end
 
 local function toQuaternion(value)
     return Quaternion.new(value.i, value.j, value.k, value.r)
+end
+
+local function quaternionDot(a, b)
+    return a.i * b.i + a.j * b.j + a.k * b.k + a.r * b.r
 end
 
 local function quaternionConjugate(value)
@@ -390,9 +431,39 @@ end
 local function maintainInputUnlock()
 end
 
+local function clearCameraOwnership()
+    runtime.ownsCamera = false
+    runtime.ownerComponentToken = nil
+    runtime.baseline = nil
+    runtime.lastApplied = nil
+    runtime.bodyProgress = 0
+    runtime.bodyPitch = 0
+    runtime.heightPitch = 0
+end
+
+local function dropCameraOwnership()
+    clearCameraOwnership()
+end
+
 local function captureBaseline(fpp)
+    local componentToken = getComponentToken(fpp)
+    if not componentToken then
+        return false
+    end
+
     if runtime.ownsCamera then
-        return true
+        if runtime.ownerComponentToken == componentToken then
+            return true
+        end
+
+        -- The previous component is no longer the active camera owner. Never
+        -- apply its baseline to the replacement component, and do not adopt the
+        -- replacement in the same callback. A short clean-frame window keeps a
+        -- component swap from looking like uninterrupted ownership.
+        dropCameraOwnership()
+        runtime.reacquireRemaining = CAMERA_REACQUIRE_DURATION
+        setMode(MODE.SUSPENDED, "FPP camera component changed")
+        return false
     end
 
     local position = fpp:GetLocalPosition()
@@ -401,44 +472,72 @@ local function captureBaseline(fpp)
         return false
     end
 
+    local baselineFov = Helpers.GetFOV(fpp)
+    if not finite(baselineFov) and not Config.inner.dontChangeFov then
+        return false
+    end
+
     runtime.baseline = {
         position = vectorCopy(position),
         orientation = quaternionCopy(orientation),
-        fov = Helpers.GetFOV(fpp) or 68,
+        -- A fallback is only used for position-curve evaluation when FOV writes
+        -- are disabled. It can never become a value that releaseCamera restores.
+        fov = finite(baselineFov) and baselineFov or 68,
     }
     runtime.ownsCamera = true
+    runtime.ownerComponentToken = componentToken
     runtime.lastApplied = nil
-    runtime.interferenceFrames = 0
-    runtime.interferenceLogged = false
+    runtime.interferenceElapsed = 0.0
     return true
 end
 
 local function releaseCamera(fpp)
     if not runtime.ownsCamera or not runtime.baseline then
-        runtime.ownsCamera = false
-        runtime.baseline = nil
-        runtime.lastApplied = nil
+        clearCameraOwnership()
         return
     end
 
-    if fpp then
-        pcall(function()
-            fpp:SetLocalTransform(
-                toVector(runtime.baseline.position),
-                toQuaternion(runtime.baseline.orientation)
-            )
-            if not Config.inner.dontChangeFov then
-                fpp:SetFOV(runtime.baseline.fov)
-            end
-        end)
+    if not fpp
+        or not isSameComponent(fpp, runtime.ownerComponentToken)
+        or not runtime.lastApplied then
+        clearCameraOwnership()
+        return
     end
 
-    runtime.ownsCamera = false
-    runtime.baseline = nil
-    runtime.lastApplied = nil
-    runtime.bodyProgress = 0
-    runtime.bodyPitch = 0
-    runtime.heightPitch = 0
+    local actualPosition = fpp:GetLocalPosition()
+    local actualOrientation = fpp:GetLocalOrientation()
+    if actualPosition and actualOrientation then
+        local positionDelta = math.abs(actualPosition.x - runtime.lastApplied.position.x)
+            + math.abs(actualPosition.y - runtime.lastApplied.position.y)
+            + math.abs(actualPosition.z - runtime.lastApplied.position.z)
+        local orientationDot = math.abs(quaternionDot(
+            actualOrientation,
+            runtime.lastApplied.orientation
+        ))
+        if positionDelta <= CAMERA_POSITION_TOLERANCE
+            and orientationDot >= CAMERA_ORIENTATION_DOT_TOLERANCE then
+            pcall(function()
+                fpp:SetLocalTransform(
+                    toVector(runtime.baseline.position),
+                    toQuaternion(runtime.baseline.orientation)
+                )
+            end)
+        end
+    end
+
+    if finite(runtime.lastApplied.fov) then
+        local ok, actualFov = pcall(function()
+            return fpp:GetFOV()
+        end)
+        if ok and finite(actualFov)
+            and math.abs(actualFov - runtime.lastApplied.fov) <= CAMERA_FOV_TOLERANCE then
+            pcall(function()
+                fpp:SetFOV(runtime.baseline.fov)
+            end)
+        end
+    end
+
+    clearCameraOwnership()
 end
 
 local function easeOutCubic(t)
@@ -550,6 +649,15 @@ local function nativePitchForVisualPitch(visualPitch, maximumBias)
     return (lower + upper) * 0.5
 end
 
+local function clearHeightPitchFloorState()
+    local floor = runtime.heightPitchFloor
+    floor.active = false
+    floor.original = nil
+    floor.applied = nil
+    floor.componentToken = nil
+    floor.failureLogged = false
+end
+
 local function restoreHeightPitchFloor(fpp)
     local floor = runtime.heightPitchFloor
     if not floor.active then
@@ -559,12 +667,31 @@ local function restoreHeightPitchFloor(fpp)
         return false
     end
 
+    if not isSameComponent(fpp, floor.componentToken) then
+        -- The old component is gone. Its limits must never be copied to the new
+        -- camera, and there is no live target left to restore here.
+        clearHeightPitchFloorState()
+        return true
+    end
+
+    local current = readNumberProperty(fpp, "pitchMin", nil)
+    if not finite(current) then
+        return false
+    end
+    if finite(floor.applied)
+        and math.abs(current - floor.applied) > NATIVE_PROPERTY_TOLERANCE then
+        -- Another owner has already replaced our value. Treat that as a clean
+        -- handoff instead of overwriting its camera profile with our baseline.
+        clearHeightPitchFloorState()
+        return true
+    end
+
     local restored = pcall(function()
         fpp.pitchMin = floor.original
     end)
     local readback = readNumberProperty(fpp, "pitchMin", nil)
     if not restored or not finite(readback)
-        or math.abs(readback - floor.original) > 0.01 then
+        or math.abs(readback - floor.original) > NATIVE_PROPERTY_TOLERANCE then
         if not floor.failureLogged then
             Helpers.Log("failed to restore native pitch floor")
             floor.failureLogged = true
@@ -572,21 +699,31 @@ local function restoreHeightPitchFloor(fpp)
         return false
     end
 
-    floor.active = false
-    floor.original = nil
-    floor.applied = nil
-    floor.failureLogged = false
+    clearHeightPitchFloorState()
     return true
 end
 
 local function applyHeightPitchFloor(fpp, maximumBias)
     local floor = runtime.heightPitchFloor
+    local componentToken = getComponentToken(fpp)
+    if not componentToken then
+        return false
+    end
+
+    if floor.active then
+        local current = readNumberProperty(fpp, "pitchMin", nil)
+        if floor.componentToken ~= componentToken
+            or not finite(current)
+            or (finite(floor.applied)
+                and math.abs(current - floor.applied) > NATIVE_PROPERTY_TOLERANCE) then
+            clearHeightPitchFloorState()
+            runtime.reacquireRemaining = CAMERA_REACQUIRE_DURATION
+            return false
+        end
+    end
+
     if not floor.active then
-        floor.original = readNumberProperty(
-            fpp,
-            "pitchMin",
-            Vars.FREELOOK.DEFAULT_PITCH_FLOOR
-        )
+        floor.original = readNumberProperty(fpp, "pitchMin", nil)
     end
     if not finite(floor.original) then
         return false
@@ -605,7 +742,7 @@ local function applyHeightPitchFloor(fpp, maximumBias)
     end)
     local readback = readNumberProperty(fpp, "pitchMin", nil)
     if not wrote or not finite(readback)
-        or math.abs(readback - adjusted) > 0.01 then
+        or math.abs(readback - adjusted) > NATIVE_PROPERTY_TOLERANCE then
         if not floor.failureLogged then
             Helpers.Log("failed to constrain native pitch floor for height bias")
             floor.failureLogged = true
@@ -618,47 +755,89 @@ local function applyHeightPitchFloor(fpp, maximumBias)
     -- downward limit instead of exposing another 1-30 degrees below the body.
     floor.active = true
     floor.applied = adjusted
+    floor.componentToken = componentToken
     floor.failureLogged = false
     return true
 end
 
 local function updateHeightPitchFloor(fpp, maximumBias)
-    if runtime.heightTransfer.active then
-        return
+    if runtime.heightTransfer.active or runtime.heightTransfer.boundProperty then
+        return true
     end
     if runtime.heightApplied then
-        applyHeightPitchFloor(fpp, maximumBias)
-    else
-        restoreHeightPitchFloor(fpp)
+        return applyHeightPitchFloor(fpp, maximumBias)
     end
+    return restoreHeightPitchFloor(fpp)
+end
+
+local function clearHeightTransferLimitState()
+    local transfer = runtime.heightTransfer
+    transfer.originalPitchMin = nil
+    transfer.originalPitchMax = nil
+    transfer.boundProperty = nil
+    transfer.componentToken = nil
 end
 
 local function restoreHeightTransferLimits(fpp)
     local transfer = runtime.heightTransfer
-    if fpp then
-        if finite(transfer.originalPitchMin) then
-            pcall(function()
-                fpp.pitchMin = transfer.originalPitchMin
-            end)
-        end
-        if finite(transfer.originalPitchMax) then
-            pcall(function()
-                fpp.pitchMax = transfer.originalPitchMax
-            end)
-        end
+    local property = transfer.boundProperty
+    if property ~= "pitchMin" and property ~= "pitchMax" then
+        clearHeightTransferLimitState()
+        return true
     end
-    transfer.originalPitchMin = nil
-    transfer.originalPitchMax = nil
-    transfer.boundProperty = nil
+
+    if not fpp then
+        return false
+    end
+    if not isSameComponent(fpp, transfer.componentToken) then
+        -- The old component cannot be restored and its limits must not be
+        -- copied onto the replacement camera.
+        clearHeightTransferLimitState()
+        return true
+    end
+
+    local current = readNumberProperty(fpp, property, nil)
+    if not finite(current) then
+        return false
+    end
+    if math.abs(current - transfer.commandedNativePitch) > NATIVE_PROPERTY_TOLERANCE then
+        -- A camera profile or another writer already replaced the temporary
+        -- limit. Relinquish it without restoring stale values.
+        clearHeightTransferLimitState()
+        return true
+    end
+
+    local original = property == "pitchMin"
+        and transfer.originalPitchMin
+        or transfer.originalPitchMax
+    if not finite(original) then
+        return false
+    end
+
+    local restored = pcall(function()
+        fpp[property] = original
+    end)
+    local readback = readNumberProperty(fpp, property, nil)
+    if not restored or not finite(readback)
+        or math.abs(readback - original) > NATIVE_PROPERTY_TOLERANCE then
+        return false
+    end
+
+    clearHeightTransferLimitState()
+    return true
 end
 
 local function abortHeightTransfer(fpp, reason, rememberFailure)
     local transfer = runtime.heightTransfer
     if not transfer.active then
+        if transfer.boundProperty and not restoreHeightTransferLimits(fpp) then
+            Helpers.Log("temporary native pitch limit is still pending restoration")
+        end
         return
     end
 
-    restoreHeightTransferLimits(fpp)
+    local sameComponent = isSameComponent(fpp, transfer.componentToken)
+    local limitsRestored = restoreHeightTransferLimits(fpp)
     transfer.heldVisualOverride = nil
     if rememberFailure and not transfer.targetApplied then
         -- Weapon contexts cannot safely retain the height counter-pitch.
@@ -672,7 +851,7 @@ local function abortHeightTransfer(fpp, reason, rememberFailure)
         -- remained valid; never latch the feature off for the rest of the session.
         runtime.heightApplied = false
         transfer.retryRemaining = HEIGHT_TRANSFER_RETRY_DELAY
-        if fpp then
+        if fpp and sameComponent then
             pcall(function()
                 fpp:ResetPitch()
             end)
@@ -682,14 +861,28 @@ local function abortHeightTransfer(fpp, reason, rememberFailure)
     end
     transfer.active = false
     transfer.elapsed = 0.0
+    if not limitsRestored then
+        Helpers.Log("temporary native pitch limit is still pending restoration")
+    end
     Helpers.Log("native pitch handoff aborted: " .. tostring(reason))
 end
 
-local function writeHeightTransferBound(fpp, nativePitch)
+local function writeHeightTransferBound(fpp, nativePitch, requireOwnership)
     local transfer = runtime.heightTransfer
     local property = transfer.boundProperty
     if property ~= "pitchMin" and property ~= "pitchMax" then
         return false, "temporary pitch bound is missing"
+    end
+    if not isSameComponent(fpp, transfer.componentToken) then
+        return false, "FPP camera changed during native pitch handoff"
+    end
+    if requireOwnership then
+        local current = readNumberProperty(fpp, property, nil)
+        if not finite(current)
+            or math.abs(current - transfer.commandedNativePitch)
+                > NATIVE_PROPERTY_TOLERANCE then
+            return false, "temporary pitch bound changed by another system", true
+        end
     end
 
     local wrote = pcall(function()
@@ -697,7 +890,7 @@ local function writeHeightTransferBound(fpp, nativePitch)
     end)
     local readback = readNumberProperty(fpp, property, nil)
     if not wrote or not finite(readback)
-        or math.abs(readback - nativePitch) > 0.01 then
+        or math.abs(readback - nativePitch) > NATIVE_PROPERTY_TOLERANCE then
         return false, property .. " rejected the temporary limit"
     end
 
@@ -707,22 +900,25 @@ end
 
 local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias)
     local transfer = runtime.heightTransfer
+    if transfer.boundProperty and not restoreHeightTransferLimits(fpp) then
+        return false, "previous temporary pitch limit is not restored"
+    end
+
+    local componentToken = getComponentToken(fpp)
+    if not componentToken then
+        return false, "FPP camera identity is unavailable"
+    end
     local heldVisualOverride = transfer.heldVisualOverride
     transfer.heldVisualOverride = nil
     if not desiredApplied and not restoreHeightPitchFloor(fpp) then
         return false, "native pitch floor could not be restored"
     end
 
-    local originalPitchMin = readNumberProperty(
-        fpp,
-        "pitchMin",
-        Vars.FREELOOK.DEFAULT_PITCH_FLOOR
-    )
-    local originalPitchMax = readNumberProperty(
-        fpp,
-        "pitchMax",
-        Vars.FREELOOK.DEFAULT_PITCH_CEILING
-    )
+    local originalPitchMin = readNumberProperty(fpp, "pitchMin", nil)
+    local originalPitchMax = readNumberProperty(fpp, "pitchMax", nil)
+    if not finite(originalPitchMin) or not finite(originalPitchMax) then
+        return false, "native pitch limits are unavailable"
+    end
     if originalPitchMin >= originalPitchMax then
         return false, "invalid native pitch limits"
     end
@@ -766,11 +962,12 @@ local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias
     transfer.easedProgress = 0.0
     transfer.originalPitchMin = originalPitchMin
     transfer.originalPitchMax = originalPitchMax
+    transfer.componentToken = componentToken
     transfer.elapsed = 0.0
 
     local property = targetNativePitch < nativePitch and "pitchMax" or "pitchMin"
     transfer.boundProperty = property
-    local wrote, reason = writeHeightTransferBound(fpp, nativePitch)
+    local wrote, reason = writeHeightTransferBound(fpp, nativePitch, false)
     if not wrote then
         restoreHeightTransferLimits(fpp)
         transfer.active = false
@@ -786,6 +983,12 @@ end
 local function updateHeightTransfer(fpp, nativePitch, context, delta)
     local transfer = runtime.heightTransfer
     local desiredApplied = context.heightDesiredApplied == true
+
+    if not transfer.active and transfer.boundProperty then
+        if not restoreHeightTransferLimits(fpp) then
+            return
+        end
+    end
 
     if transfer.retryRemaining > 0.0 then
         transfer.retryRemaining = math.max(
@@ -853,10 +1056,18 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
             end
             local commandedNativePitch = nativePitch
                 + (targetNativePitch - nativePitch) * remainingBlend
-            local wrote, reason = writeHeightTransferBound(fpp, commandedNativePitch)
+            local wrote, reason, ownershipLost = writeHeightTransferBound(
+                fpp,
+                commandedNativePitch,
+                true
+            )
             if not wrote then
-                abortHeightTransfer(fpp, reason, true)
-                return
+                abortHeightTransfer(fpp, reason, not ownershipLost)
+                if ownershipLost then
+                    CameraCore.Yield(reason)
+                    return false
+                end
+                return true
             end
             transfer.easedProgress = eased
 
@@ -864,11 +1075,14 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
                 <= HEIGHT_TRANSFER_TOLERANCE
 
             if progress >= 1.0 and reachedTarget then
-                restoreHeightTransferLimits(fpp)
+                local limitsRestored = restoreHeightTransferLimits(fpp)
                 transfer.active = false
                 transfer.elapsed = 0.0
                 runtime.heightApplied = transfer.targetApplied
                 transfer.retryRemaining = 0.0
+                if not limitsRestored then
+                    Helpers.Log("temporary native pitch limit is still pending restoration")
+                end
                 Helpers.Log((
                     "native pitch handoff completed at %.2f"
                 ):format(nativePitch))
@@ -1305,20 +1519,59 @@ local function updateReturn(delta)
     end
 end
 
-local function quaternionDot(a, b)
-    return a.i * b.i + a.j * b.j + a.k * b.k + a.r * b.r
+local function suspendForConflict(fpp, positionDelta, orientationDot, fovDelta)
+    abortHeightTransfer(fpp, "camera conflict", false)
+    if not restoreHeightPitchFloor(fpp) then
+        Helpers.Log("native pitch floor is still pending restoration after camera conflict")
+    end
+
+    runtime.heightApplied = nil
+    runtime.heightEligibilityElapsed = 0.0
+    runtime.heightTransfer.retryRemaining = 0.0
+    runtime.pendingFreeLook = false
+    runtime.frozen = false
+    clearInput()
+    runtime.freeYaw = 0
+    runtime.freePitch = 0
+    runtime.rawYaw = 0
+    runtime.rawPitch = 0
+    runtime.pitchFloor = nil
+    runtime.pitchCeiling = nil
+    runtime.entryNativePitch = 0.0
+    runtime.entryNativeOrientation = nil
+    runtime.returnElapsed = 0
+    resetBodyBlendTracking()
+    unlockNativeInput(fpp)
+    dropCameraOwnership()
+
+    local conflict = runtime.conflict
+    conflict.active = true
+    conflict.reason = "another system is modifying the first-person camera"
+    conflict.positionDelta = positionDelta
+    conflict.orientationDot = orientationDot
+    conflict.fovDelta = fovDelta
+    Helpers.Log((
+        "camera conflict detected; camera changes suspended for this session: "
+            .. "position=%.5f orientationDot=%.7f fov=%.3f"
+    ):format(positionDelta, orientationDot, fovDelta))
+    setMode(MODE.CONFLICT, "another camera writer detected")
 end
 
-local function detectCompetingWriter(actualPosition, actualOrientation)
+local function detectCompetingWriter(fpp, actualPosition, actualOrientation, actualFov, delta)
     if not runtime.lastApplied then
-        return
+        return false
     end
 
     local positionDelta = math.abs(actualPosition.x - runtime.lastApplied.position.x)
         + math.abs(actualPosition.y - runtime.lastApplied.position.y)
         + math.abs(actualPosition.z - runtime.lastApplied.position.z)
     local orientationDot = math.abs(quaternionDot(actualOrientation, runtime.lastApplied.orientation))
-    local disturbed = positionDelta > 0.002 or orientationDot < 0.9995
+    local fovDelta = finite(actualFov) and finite(runtime.lastApplied.fov)
+        and math.abs(actualFov - runtime.lastApplied.fov)
+        or 0.0
+    local disturbed = positionDelta > CAMERA_POSITION_TOLERANCE
+        or orientationDot < CAMERA_ORIENTATION_DOT_TOLERANCE
+        or fovDelta > CAMERA_FOV_TOLERANCE
 
     if runtime.mode == MODE.FREELOOK
         and not runtime.freeLookLocalWriterLogged
@@ -1329,23 +1582,21 @@ local function detectCompetingWriter(actualPosition, actualOrientation)
         ):format(positionDelta, orientationDot))
     end
 
-    if runtime.interferenceLogged then
-        return
-    end
-
     if disturbed then
-        runtime.interferenceFrames = runtime.interferenceFrames + 1
+        runtime.interferenceElapsed = runtime.interferenceElapsed
+            + math.min(math.max(tonumber(delta) or 0.0, 0.0), 0.10)
     else
-        runtime.interferenceFrames = 0
+        runtime.interferenceElapsed = 0.0
     end
 
-    if runtime.interferenceFrames >= 30 then
-        runtime.interferenceLogged = true
-        Helpers.Log("another system is repeatedly writing the FPP local transform; camera mods may be competing")
+    if runtime.interferenceElapsed >= CAMERA_INTERFERENCE_DURATION then
+        suspendForConflict(fpp, positionDelta, orientationDot, fovDelta)
+        return true
     end
+    return false
 end
 
-local function composeAndWrite(fpp, context)
+local function composeAndWrite(fpp, context, delta)
     if not captureBaseline(fpp) or not runtime.baseline then
         return false
     end
@@ -1355,7 +1606,24 @@ local function composeAndWrite(fpp, context)
     if not actualPosition or not actualOrientation then
         return false
     end
-    detectCompetingWriter(actualPosition, actualOrientation)
+    local actualFov = nil
+    if runtime.lastApplied and finite(runtime.lastApplied.fov) then
+        local ok, value = pcall(function()
+            return fpp:GetFOV()
+        end)
+        if ok and finite(value) then
+            actualFov = value
+        end
+    end
+    if detectCompetingWriter(
+        fpp,
+        actualPosition,
+        actualOrientation,
+        actualFov,
+        delta
+    ) then
+        return false
+    end
 
     local nativeOrientation = getNativeOrientation(fpp, actualOrientation)
     local nativePitch = nativeOrientation
@@ -1614,21 +1882,27 @@ local function composeAndWrite(fpp, context)
         )
     end
 
-    local ok = pcall(function()
+    local transformOk = pcall(function()
         fpp:SetLocalTransform(toVector(position), orientation)
-        if not Config.inner.dontChangeFov then
-            fpp:SetFOV(body.fov + freeOffset.fovDelta)
-        end
     end)
-    if not ok then
+    if not transformOk then
         return false
     end
 
+    local appliedFov = nil
+    local fovOk = true
+    if not Config.inner.dontChangeFov then
+        appliedFov = body.fov + freeOffset.fovDelta
+        fovOk = pcall(function()
+            fpp:SetFOV(appliedFov)
+        end)
+    end
     runtime.lastApplied = {
         position = position,
         orientation = quaternionCopy(orientation),
+        fov = fovOk and appliedFov or nil,
     }
-    return true
+    return fovOk
 end
 
 function CameraCore.SetInputInversion(invertX, invertY)
@@ -1665,6 +1939,9 @@ function CameraCore.OnAction(actionName, value)
 end
 
 function CameraCore.BeginFreeLook(context)
+    if runtime.conflict.active or runtime.frozen or runtime.reacquireRemaining > 0.0 then
+        return false
+    end
     if runtime.mode == MODE.FREELOOK then
         return true
     end
@@ -1860,30 +2137,38 @@ function CameraCore.AbortFreeLook()
 end
 
 function CameraCore.Update(delta, context)
-    local fpp = Helpers.GetFPP()
-    if not fpp then
-        abortHeightTransfer(nil, "FPP camera unavailable", false)
-        runtime.heightApplied = nil
-        runtime.heightEligibilityElapsed = 0.0
-        resetBodyBlendTracking()
-        clearInput()
-        runtime.freeYaw = 0
-        runtime.freePitch = 0
-        runtime.rawYaw = 0
-        runtime.rawPitch = 0
-        runtime.pitchFloor = nil
-        runtime.pitchCeiling = nil
-        runtime.entryNativePitch = 0.0
-        runtime.entryNativeOrientation = nil
-        runtime.ownsCamera = false
-        runtime.baseline = nil
-        runtime.lastApplied = nil
-        runtime.lock.active = false
-        setMode(MODE.SUSPENDED, "FPP camera unavailable")
+    if runtime.conflict.active or runtime.frozen then
         return
     end
 
     local elapsedDelta = math.max(tonumber(delta) or 0.0, 0.0)
+    if runtime.reacquireRemaining > 0.0 then
+        runtime.reacquireRemaining = math.max(
+            0.0,
+            runtime.reacquireRemaining - elapsedDelta
+        )
+        return
+    end
+
+    local fpp = Helpers.GetFPP()
+    if not fpp then
+        abortHeightTransfer(nil, "FPP camera unavailable", false)
+        restoreHeightPitchFloor(nil)
+        runtime.heightApplied = nil
+        runtime.heightEligibilityElapsed = 0.0
+        runtime.reacquireRemaining = CAMERA_REACQUIRE_DURATION
+        clearTransientCameraState(nil)
+        dropCameraOwnership()
+        setMode(MODE.SUSPENDED, "FPP camera unavailable")
+        return
+    end
+
+    if runtime.ownsCamera
+        and not isSameComponent(fpp, runtime.ownerComponentToken) then
+        CameraCore.Yield("FPP camera component changed")
+        return
+    end
+
     local inputDelta = math.min(elapsedDelta, 0.10)
     maintainInputUnlock(fpp)
     updateHeightEligibility(context, elapsedDelta)
@@ -1896,7 +2181,8 @@ function CameraCore.Update(delta, context)
         -- Truly incompatible cameras must never inherit the height offset. The
         -- less destructive held-pitch exit below is reserved for ordinary
         -- on-foot transitions where the FPP parent remains meaningful.
-        CameraCore.ResetHeightAdjustment("height context invalid")
+        CameraCore.Yield("height context invalid")
+        return
     end
 
     if (runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING)
@@ -1920,7 +2206,7 @@ function CameraCore.Update(delta, context)
         else
             updateReturn(elapsedDelta)
         end
-        composeAndWrite(fpp, context)
+        composeAndWrite(fpp, context, elapsedDelta)
         return
     end
 
@@ -1932,7 +2218,7 @@ function CameraCore.Update(delta, context)
     if not context.bodyContextEligible
         and not context.heightCanTransfer
         and not preservingHeightTransition then
-        CameraCore.Suspend("camera context invalid")
+        CameraCore.Yield("camera context invalid")
         return
     end
 
@@ -1946,6 +2232,7 @@ function CameraCore.Update(delta, context)
     local heightManaged = context.heightEligible
         or runtime.heightApplied == true
         or runtime.heightTransfer.active
+        or runtime.heightTransfer.boundProperty ~= nil
     if not bodyManaged and not heightManaged then
         restoreHeightPitchFloor(fpp)
         releaseCamera(fpp)
@@ -1960,12 +2247,18 @@ function CameraCore.Update(delta, context)
     end
 
     runtime.nativePitch = nativePitch
-    updateHeightTransfer(fpp, nativePitch, context, elapsedDelta)
-    updateHeightPitchFloor(fpp, context.heightPitch)
+    if updateHeightTransfer(fpp, nativePitch, context, elapsedDelta) == false then
+        return
+    end
+    if not updateHeightPitchFloor(fpp, context.heightPitch) then
+        CameraCore.Yield("native pitch floor ownership unavailable")
+        return
+    end
     if not context.bodyEligible
         and not context.heightCanTransfer
         and runtime.heightApplied ~= true
         and not runtime.heightTransfer.active
+        and runtime.heightTransfer.boundProperty == nil
         and not bodyManaged then
         -- The transition-safe height exit has completed. Release ownership now;
         -- unlike Suspend(), this does not reset the native pitch we just moved
@@ -1978,7 +2271,7 @@ function CameraCore.Update(delta, context)
     if runtime.pendingFreeLook and not runtime.heightTransfer.active then
         runtime.pendingFreeLook = false
         if context.freeEligible and CameraCore.BeginFreeLook(context) then
-            composeAndWrite(fpp, context)
+            composeAndWrite(fpp, context, elapsedDelta)
             return
         end
     end
@@ -1991,6 +2284,7 @@ function CameraCore.Update(delta, context)
     heightManaged = context.heightEligible
         or runtime.heightApplied == true
         or runtime.heightTransfer.active
+        or runtime.heightTransfer.boundProperty ~= nil
     if runtime.bodyProgress <= 0.0001 and not heightManaged then
         releaseCamera(fpp)
         setMode(MODE.NATIVE, "camera corrections inactive")
@@ -2001,26 +2295,32 @@ function CameraCore.Update(delta, context)
         return
     end
     setMode(MODE.BODY, "camera correction active")
-    composeAndWrite(fpp, context)
+    composeAndWrite(fpp, context, elapsedDelta)
 end
 
 function CameraCore.RestoreBaselineFOV()
     local fpp = Helpers.GetFPP()
-    if fpp and runtime.baseline then
-        fpp:SetFOV(runtime.baseline.fov)
+    if not fpp or not runtime.baseline or not runtime.lastApplied
+        or not isSameComponent(fpp, runtime.ownerComponentToken)
+        or not finite(runtime.lastApplied.fov) then
+        return
+    end
+
+    local ok, currentFov = pcall(function()
+        return fpp:GetFOV()
+    end)
+    if ok and finite(currentFov)
+        and math.abs(currentFov - runtime.lastApplied.fov) <= CAMERA_FOV_TOLERANCE then
+        local restored = pcall(function()
+            fpp:SetFOV(runtime.baseline.fov)
+        end)
+        if restored then
+            runtime.lastApplied.fov = nil
+        end
     end
 end
 
-function CameraCore.Suspend(reason)
-    local fpp = Helpers.GetFPP()
-    local resetNativePitch = runtime.heightApplied == true
-        or runtime.heightTransfer.active
-        or runtime.heightPitchFloor.active
-    abortHeightTransfer(fpp, reason or "suspended", false)
-    restoreHeightPitchFloor(fpp)
-    runtime.heightApplied = resetNativePitch and false or nil
-    runtime.heightEligibilityElapsed = 0.0
-    runtime.heightTransfer.retryRemaining = 0.0
+clearTransientCameraState = function(fpp)
     runtime.pendingFreeLook = false
     clearInput()
     runtime.freeYaw = 0
@@ -2035,13 +2335,67 @@ function CameraCore.Suspend(reason)
     runtime.entryNativeOrientation = nil
     runtime.returnElapsed = 0
     unlockNativeInput(fpp)
+end
+
+local function clearConflictState()
+    local conflict = runtime.conflict
+    conflict.active = false
+    conflict.reason = nil
+    conflict.positionDelta = 0.0
+    conflict.orientationDot = 1.0
+    conflict.fovDelta = 0.0
+    runtime.interferenceElapsed = 0.0
+end
+
+function CameraCore.Yield(reason)
+    local fpp = Helpers.GetFPP()
+    abortHeightTransfer(fpp, reason or "camera ownership yielded", false)
+    if not restoreHeightPitchFloor(fpp) then
+        Helpers.Log("native pitch floor is still pending restoration while yielding camera ownership")
+    end
+    runtime.heightApplied = nil
+    runtime.heightEligibilityElapsed = 0.0
+    runtime.heightTransfer.retryRemaining = 0.0
+    runtime.frozen = false
+    runtime.reacquireRemaining = CAMERA_REACQUIRE_DURATION
+    clearTransientCameraState(fpp)
+    dropCameraOwnership()
+    if runtime.conflict.active then
+        setMode(MODE.CONFLICT, reason or "camera ownership yielded")
+    else
+        setMode(MODE.SUSPENDED, reason or "camera ownership yielded")
+    end
+end
+
+function CameraCore.Suspend(reason)
+    local fpp = Helpers.GetFPP()
+    local heightComponentToken = runtime.heightTransfer.componentToken
+        or runtime.heightPitchFloor.componentToken
+        or runtime.ownerComponentToken
+    local resetNativePitch = runtime.heightApplied == true
+        or runtime.heightTransfer.active
+        or runtime.heightPitchFloor.active
+    local canResetNativePitch = resetNativePitch
+        and isSameComponent(fpp, heightComponentToken)
+    abortHeightTransfer(fpp, reason or "suspended", false)
+    restoreHeightPitchFloor(fpp)
+    runtime.heightApplied = resetNativePitch and false or nil
+    runtime.heightEligibilityElapsed = 0.0
+    runtime.heightTransfer.retryRemaining = 0.0
+    runtime.frozen = false
+    runtime.reacquireRemaining = 0.0
+    clearTransientCameraState(fpp)
     releaseCamera(fpp)
-    if resetNativePitch and fpp then
+    if canResetNativePitch and fpp then
         pcall(function()
             fpp:ResetPitch()
         end)
     end
-    setMode(MODE.SUSPENDED, reason or "suspended")
+    if runtime.conflict.active then
+        setMode(MODE.CONFLICT, reason or "suspended")
+    else
+        setMode(MODE.SUSPENDED, reason or "suspended")
+    end
 end
 
 function CameraCore.ResetHeightAdjustment(reason)
@@ -2049,16 +2403,14 @@ function CameraCore.ResetHeightAdjustment(reason)
     -- regular height handoff then transfers the new amount into native pitch,
     -- producing vertical movement without visibly pitching the view up or down.
     CameraCore.Suspend(reason or "height adjustment changed")
-    local fpp = Helpers.GetFPP()
-    if fpp then
-        pcall(function()
-            fpp:ResetPitch()
-        end)
-    end
     runtime.heightApplied = false
 end
 
 function CameraCore.Pause(reason)
+    if runtime.conflict.active then
+        return
+    end
+
     local fpp = Helpers.GetFPP()
     clearInput()
     runtime.pendingFreeLook = false
@@ -2072,12 +2424,127 @@ function CameraCore.Pause(reason)
     runtime.entryNativeOrientation = nil
     runtime.returnElapsed = 0
     unlockNativeInput(fpp)
+    runtime.frozen = true
 
     -- Escape pauses CET updates, but REDengine renders another gameplay frame
     -- while closing the menu. Keep our already-composed transform and baseline
     -- alive so that frame cannot expose the raw neck/body camera. The next
     -- onUpdate resumes composition from the same ownership state.
     setMode(MODE.SUSPENDED, reason or "game paused")
+end
+
+function CameraCore.Resume(reason)
+    if runtime.conflict.active then
+        runtime.frozen = false
+        return false
+    end
+    if not runtime.frozen then
+        return true
+    end
+
+    runtime.frozen = false
+    local fpp = Helpers.GetFPP()
+    if not runtime.ownsCamera then
+        return true
+    end
+    if not fpp or not isSameComponent(fpp, runtime.ownerComponentToken) then
+        CameraCore.Yield("FPP camera changed while paused")
+        return false
+    end
+
+    local transfer = runtime.heightTransfer
+    if transfer.boundProperty then
+        if not isSameComponent(fpp, transfer.componentToken) then
+            CameraCore.Yield("native pitch handoff component changed while paused")
+            return false
+        end
+        local currentBound = readNumberProperty(fpp, transfer.boundProperty, nil)
+        if not finite(currentBound)
+            or math.abs(currentBound - transfer.commandedNativePitch)
+                > NATIVE_PROPERTY_TOLERANCE then
+            Helpers.Log("native pitch bound changed while paused; stale handoff discarded")
+            CameraCore.Yield("native pitch handoff owner changed while paused")
+            return false
+        end
+    end
+
+    if runtime.lastApplied then
+        local actualPosition = fpp:GetLocalPosition()
+        local actualOrientation = fpp:GetLocalOrientation()
+        if not actualPosition or not actualOrientation then
+            CameraCore.Yield("FPP camera unavailable after pause")
+            return false
+        end
+
+        local positionDelta = math.abs(actualPosition.x - runtime.lastApplied.position.x)
+            + math.abs(actualPosition.y - runtime.lastApplied.position.y)
+            + math.abs(actualPosition.z - runtime.lastApplied.position.z)
+        local orientationDot = math.abs(quaternionDot(
+            actualOrientation,
+            runtime.lastApplied.orientation
+        ))
+        local fovChanged = false
+        if finite(runtime.lastApplied.fov) then
+            local ok, actualFov = pcall(function()
+                return fpp:GetFOV()
+            end)
+            fovChanged = not ok or not finite(actualFov)
+                or math.abs(actualFov - runtime.lastApplied.fov) > CAMERA_FOV_TOLERANCE
+        end
+
+        if positionDelta > CAMERA_POSITION_TOLERANCE
+            or orientationDot < CAMERA_ORIENTATION_DOT_TOLERANCE
+            or fovChanged then
+            Helpers.Log("camera changed while paused; stale baseline discarded")
+            CameraCore.Yield("camera owner changed while paused")
+            return false
+        end
+    end
+
+    runtime.reacquireRemaining = 0.0
+    setMode(MODE.SUSPENDED, reason or "game resumed")
+    return true
+end
+
+function CameraCore.RetryConflict()
+    if not runtime.conflict.active then
+        return false
+    end
+
+    local fpp = Helpers.GetFPP()
+    abortHeightTransfer(fpp, "camera conflict retry", false)
+    restoreHeightPitchFloor(fpp)
+    clearConflictState()
+    runtime.frozen = false
+    runtime.reacquireRemaining = CAMERA_REACQUIRE_DURATION
+    setMode(MODE.SUSPENDED, "camera conflict retry requested")
+    Helpers.Log("camera conflict cleared; camera ownership retry armed")
+    return true
+end
+
+function CameraCore.OnSessionStart()
+    CameraCore.Yield("new session")
+    local hadConflict = runtime.conflict.active
+    clearConflictState()
+    if hadConflict then
+        Helpers.Log("camera conflict cleared for new session")
+    end
+    runtime.reacquireRemaining = CAMERA_REACQUIRE_DURATION
+    setMode(MODE.SUSPENDED, "new session")
+end
+
+function CameraCore.HasConflict()
+    return runtime.conflict.active
+end
+
+function CameraCore.GetConflictState()
+    return {
+        active = runtime.conflict.active,
+        reason = runtime.conflict.reason,
+        positionDelta = runtime.conflict.positionDelta,
+        orientationDot = runtime.conflict.orientationDot,
+        fovDelta = runtime.conflict.fovDelta,
+    }
 end
 
 function CameraCore.IsFreeLooking()
@@ -2127,6 +2594,14 @@ function CameraCore.GetDebugState()
         pitchCeiling = runtime.pitchCeiling,
         entryNativePitch = runtime.entryNativePitch,
         ownsCamera = runtime.ownsCamera,
+        ownerComponentToken = runtime.ownerComponentToken,
+        frozen = runtime.frozen,
+        reacquireRemaining = runtime.reacquireRemaining,
+        conflictActive = runtime.conflict.active,
+        conflictReason = runtime.conflict.reason,
+        conflictPositionDelta = runtime.conflict.positionDelta,
+        conflictOrientationDot = runtime.conflict.orientationDot,
+        conflictFovDelta = runtime.conflict.fovDelta,
         inputLocked = runtime.lock.active,
         inputLockMechanism = "action consumer",
     }
