@@ -150,7 +150,20 @@ local function getComponentToken(fpp)
         return nil
     end
 
-    local ok, token = pcall(tostring, fpp)
+    local ok, token = pcall(function()
+        local entity = fpp:GetEntity()
+        local entityID = entity and entity:GetEntityID()
+        local entityHash = entityID and entityID.hash
+        if entityHash == nil then
+            return nil
+        end
+
+        -- CET may create a fresh Lua wrapper each time the same native component
+        -- is returned, so tostring(fpp) is not a stable identity. GetFPP always
+        -- selects this player's FPP camera; key its lifetime to the owning player
+        -- entity instead, which also changes on puppet/session replacement.
+        return tostring(entityHash)
+    end)
     if not ok or type(token) ~= "string" or token == "" then
         return nil
     end
@@ -713,9 +726,7 @@ local function applyHeightPitchFloor(fpp, maximumBias)
     if floor.active then
         local current = readNumberProperty(fpp, "pitchMin", nil)
         if floor.componentToken ~= componentToken
-            or not finite(current)
-            or (finite(floor.applied)
-                and math.abs(current - floor.applied) > NATIVE_PROPERTY_TOLERANCE) then
+            or not finite(current) then
             clearHeightPitchFloorState()
             runtime.reacquireRemaining = CAMERA_REACQUIRE_DURATION
             return false
@@ -867,7 +878,7 @@ local function abortHeightTransfer(fpp, reason, rememberFailure)
     Helpers.Log("native pitch handoff aborted: " .. tostring(reason))
 end
 
-local function writeHeightTransferBound(fpp, nativePitch, requireOwnership)
+local function writeHeightTransferBound(fpp, nativePitch)
     local transfer = runtime.heightTransfer
     local property = transfer.boundProperty
     if property ~= "pitchMin" and property ~= "pitchMax" then
@@ -876,15 +887,6 @@ local function writeHeightTransferBound(fpp, nativePitch, requireOwnership)
     if not isSameComponent(fpp, transfer.componentToken) then
         return false, "FPP camera changed during native pitch handoff"
     end
-    if requireOwnership then
-        local current = readNumberProperty(fpp, property, nil)
-        if not finite(current)
-            or math.abs(current - transfer.commandedNativePitch)
-                > NATIVE_PROPERTY_TOLERANCE then
-            return false, "temporary pitch bound changed by another system", true
-        end
-    end
-
     local wrote = pcall(function()
         fpp[property] = nativePitch
     end)
@@ -967,7 +969,7 @@ local function beginHeightTransfer(fpp, nativePitch, desiredApplied, maximumBias
 
     local property = targetNativePitch < nativePitch and "pitchMax" or "pitchMin"
     transfer.boundProperty = property
-    local wrote, reason = writeHeightTransferBound(fpp, nativePitch, false)
+    local wrote, reason = writeHeightTransferBound(fpp, nativePitch)
     if not wrote then
         restoreHeightTransferLimits(fpp)
         transfer.active = false
@@ -1056,17 +1058,9 @@ local function updateHeightTransfer(fpp, nativePitch, context, delta)
             end
             local commandedNativePitch = nativePitch
                 + (targetNativePitch - nativePitch) * remainingBlend
-            local wrote, reason, ownershipLost = writeHeightTransferBound(
-                fpp,
-                commandedNativePitch,
-                true
-            )
+            local wrote, reason = writeHeightTransferBound(fpp, commandedNativePitch)
             if not wrote then
-                abortHeightTransfer(fpp, reason, not ownershipLost)
-                if ownershipLost then
-                    CameraCore.Yield(reason)
-                    return false
-                end
+                abortHeightTransfer(fpp, reason, true)
                 return true
             end
             transfer.easedProgress = eased
