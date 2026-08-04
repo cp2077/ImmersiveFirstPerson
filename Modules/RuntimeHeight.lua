@@ -2,6 +2,7 @@ local Helpers = require("Modules/Helpers")
 
 local RuntimeHeight = {}
 
+local BASE_PLAYER_HEIGHT_CM = 171
 local MAXIMUM_HEIGHT_CM = 30
 local TRANSITION_DURATION = 0.10
 local CONTRACT_POLL_INTERVAL = 0.50
@@ -292,6 +293,10 @@ end
 
 function RuntimeHeight.GetEffectiveHeightCentimeters()
     return state.currentBlend * MAXIMUM_HEIGHT_CM
+end
+
+function RuntimeHeight.GetEstimatedHeightCentimeters()
+    return BASE_PLAYER_HEIGHT_CM + RuntimeHeight.GetEffectiveHeightCentimeters()
 end
 
 function RuntimeHeight.GetMaximumHeightCentimeters()

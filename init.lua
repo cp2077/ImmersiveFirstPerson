@@ -515,25 +515,24 @@ function ImmersiveFirstPerson.Init()
                 RuntimeHeight.GetMaximumHeightCentimeters(),
                 "+%d cm"
             )
-            tooltipIfHovered(
-                "Smoothly blends the optional full-height player animgraph. +0 cm turns it off."
-            )
             if changed then
                 Config.SaveConfig()
                 RuntimeHeight.MarkDirty()
             end
 
-            if Config.inner.heightAdjustmentAmount > 8 then
+            if Config.inner.heightAdjustmentAmount > 12 then
+                ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.25, 0.25, 1.0)
                 ImGui.TextWrapped(
-                    "Above +8 cm is experimental: knees, authored contacts, and transitions may look wrong."
+                    "Above +12 cm is experimental: knees, authored contacts, and transitions may look wrong."
                 )
+                ImGui.PopStyleColor(1)
             end
             local suppressionReason = RuntimeHeight.GetSuppressionReason()
             if Config.inner.heightAdjustmentAmount > 0 and suppressionReason then
                 ImGui.TextWrapped("Temporarily disabled: " .. suppressionReason)
             end
-            ImGui.Text(("Effective height: +%.1f cm"):format(
-                RuntimeHeight.GetEffectiveHeightCentimeters()
+            ImGui.Text(("Estimated height: ~%.0f cm"):format(
+                RuntimeHeight.GetEstimatedHeightCentimeters()
             ))
         else
             ImGui.TextDisabled("Height slider unavailable")
@@ -542,8 +541,6 @@ function ImmersiveFirstPerson.Init()
             )
         end
 
-        ImGui.Text("Camera state: " .. CameraCore.GetMode())
-        ImGui.TextWrapped("Height status: " .. RuntimeHeight.GetStatus())
         --[[ Native camera sampling UI is retained for future curve captures.
         ImGui.Text("Native camera sampler: " .. NativeCameraSampler.GetStatus())
         if NativeCameraSampler.IsActive() then
