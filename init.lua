@@ -212,14 +212,13 @@ end
 local function setSessionLoaded(loaded, reason)
     isLoaded = loaded
     if loaded then
-        CameraCore.Resume(reason)
         refreshInputSettings()
     else
         lastCameraBlockReason = nil
         if reason == "game paused" then
             CameraCore.Pause(reason)
         else
-            CameraCore.Yield(reason)
+            CameraCore.Suspend(reason)
         end
     end
 end
@@ -241,10 +240,6 @@ end
 
 function API.GetCameraState()
     return CameraCore.GetDebugState()
-end
-
-function API.RetryCameraOwnership()
-    return CameraCore.RetryConflict()
 end
 
 local function tooltipIfHovered(text)
@@ -347,7 +342,6 @@ function ImmersiveFirstPerson.Init()
         end)
 
         GameSession.OnStart(function()
-            CameraCore.OnSessionStart()
             setSessionLoaded(true, "session started")
         end)
         GameSession.OnResume(function()
@@ -379,10 +373,6 @@ function ImmersiveFirstPerson.Init()
         if NativeCameraSampler.IsActive() then
             CameraCore.Suspend("recording native camera")
             NativeCameraSampler.Update(delta, CameraCore.ReadNativePitch())
-            return
-        end
-
-        if CameraCore.HasConflict() then
             return
         end
 
@@ -491,19 +481,6 @@ function ImmersiveFirstPerson.Init()
                     .. "holstered. Larger values may cause clipping, visual artifacts, "
                     .. "or unusual mouse/camera movement."
             )
-        end
-
-        local conflict = CameraCore.GetConflictState()
-        if conflict.active then
-            ImGui.Separator()
-            ImGui.Text("Camera conflict detected")
-            ImGui.TextWrapped(
-                "Immersive First Person has suspended its camera changes because "
-                    .. "another system is modifying the first-person camera."
-            )
-            if ImGui.Button("Retry camera ownership") then
-                CameraCore.RetryConflict()
-            end
         end
 
         ImGui.Text("Camera state: " .. CameraCore.GetMode())

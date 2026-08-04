@@ -9,8 +9,6 @@ Body correction runs while looking down during normal unarmed gameplay. It suspe
 
 FreeLook remains active only while its input is held and releases immediately on key-up. An optional return animation smoothly recenters the view.
 
-If another system repeatedly writes the same first-person camera transform or FOV, the mod suspends its camera changes for the current gameplay session instead of competing. The CET Overlay reports the conflict and provides a manual retry button; starting a new session clears the suspension automatically.
-
 ## Installation
 
 1. Install Cyber Engine Tweaks.
