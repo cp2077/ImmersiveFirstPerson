@@ -164,14 +164,14 @@ local function buildCameraContext(delta)
         and not state.carryingBody
         and not state.felled
         and not blockingThirdPartyMods()
-    -- A takedown remains "compatible" only long enough to fade the local height
-    -- offset; actual height composition is disabled before the authored camera
-    -- takes ownership.
-    -- Keep height disabled for the complete swimming high-level state so the
-    -- local offset never carries into its pitch-driven authored camera.
-    -- Ladders are also excluded because their Enter/Default/Reset/Exit profiles
-    -- author their own view position. Vault and non-ladder climb states remain
-    -- supported.
+    -- A takedown remains "compatible" only long enough to transfer the hidden
+    -- pitch back while holding the visible view; actual height composition is
+    -- disabled before the authored takedown camera takes ownership.
+    -- Keep height disabled for the complete swimming high-level state. The
+    -- hidden native pitch bias can affect REDengine's pitch-driven dive rules.
+    -- Ladders are also excluded: their Enter/Default/Reset/Exit profiles replace
+    -- pitchMin with a centred floor, and adding height bias to that floor forces
+    -- the camera upward. Vault and non-ladder climb states remain supported.
     local heightContextEligible = heightCameraCompatible
         and not isTakingDown
         and not state.swimming
@@ -197,8 +197,8 @@ local function buildCameraContext(delta)
         heightCanTransfer = heightContextEligible,
         heightCanPreserveTransition = heightCameraCompatible,
         heightResetAllowed = heightContextEligible and not blocksCameraForWeapon,
-        -- Keep the requested amount available while ineligible so CameraCore can
-        -- blend the local vertical offset through weapon transitions.
+        -- Keep the requested bias available while ineligible so CameraCore can
+        -- transfer it into/out of native pitch during weapon transitions.
         heightPitch = Config.inner.heightAdjustmentAmount,
         crouching = Helpers.IsCrouching(),
         hasWeapon = hasWeapon,
