@@ -81,6 +81,7 @@ jobs:
               raise SystemExit("Release notes must contain a '## Changelog' heading")
 
           description_section, changelog = (section.strip() for section in sections)
+          changelog = re.sub(r"(?m)^[ \t]*-[ \t]+", "", changelog).strip()
           description_paragraphs = [
               paragraph.strip()
               for paragraph in re.split(r"\n[ \t]*\n", description_section)
