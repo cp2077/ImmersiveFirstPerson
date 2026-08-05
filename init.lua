@@ -272,6 +272,37 @@ local function tooltipIfHovered(text)
     end
 end
 
+local function isShiftEnabled()
+    if type(GetMod) ~= "function" then
+        return false
+    end
+
+    local found, shift = pcall(GetMod, "Shift")
+    local api = found and type(shift) == "table" and shift.api or nil
+    if type(api) ~= "table" or type(api.IsEnabled) ~= "function" then
+        return false
+    end
+
+    local checked, enabled = pcall(api.IsEnabled)
+    return checked and enabled == true
+end
+
+local function drawCompatibilityWarnings()
+    if not isShiftEnabled() then
+        return
+    end
+
+    ImGui.Separator()
+    ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.65, 0.15, 1.0)
+    ImGui.Text("Shift compatibility warning")
+    ImGui.PopStyleColor(1)
+    ImGui.TextWrapped(
+        "Shift can reset the first-person camera while holstering. "
+        .. "Disable Shift with its global power toggle; its individual camera toggles do not prevent this conflict."
+    )
+    ImGui.Separator()
+end
+
 local function registerPlayerInput(cetVersion)
     local function registerInputListeners(player)
         if not player then
@@ -443,6 +474,8 @@ function ImmersiveFirstPerson.Init()
                 CameraCore.Suspend("disabled in overlay")
             end
         end
+
+        drawCompatibilityWarnings()
 
         Config.inner.debugLogging, changed = ImGui.Checkbox(
             "Debug logging",
