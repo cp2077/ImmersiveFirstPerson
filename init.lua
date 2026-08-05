@@ -547,7 +547,13 @@ function ImmersiveFirstPerson.Init()
 
         ImGui.Separator()
         ImGui.Text("Height")
-        if RuntimeHeight.IsAvailable() then
+        if not GameSession.IsLoaded() then
+            ImGui.TextWrapped(
+                "Load a save to check height compatibility and adjust height."
+            )
+        elseif RuntimeHeight.IsCompatibilityPending() then
+            ImGui.TextDisabled("Checking height compatibility...")
+        elseif RuntimeHeight.IsAvailable() then
             Config.inner.heightAdjustmentAmount, changed = ImGui.SliderInt(
                 "Increase",
                 math.floor(Config.inner.heightAdjustmentAmount),

@@ -284,6 +284,11 @@ function RuntimeHeight.IsAvailable()
         and state.graphStatus == GRAPH_STATUS.COMPATIBLE
 end
 
+function RuntimeHeight.IsCompatibilityPending()
+    return state.nativeAvailable ~= false
+        and state.graphStatus == GRAPH_STATUS.WAITING
+end
+
 function RuntimeHeight.GetStatus()
     return state.status
 end

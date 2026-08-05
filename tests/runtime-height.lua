@@ -43,6 +43,8 @@ end
 
 local RuntimeHeight = require("Modules/RuntimeHeight")
 
+assert(RuntimeHeight.IsCompatibilityPending(), "graph check should begin pending")
+
 -- CET may return a fresh Lua wrapper for the same native player every call.
 -- The transition must still finish instead of restarting from zero.
 for _ = 1, 10 do
@@ -50,6 +52,7 @@ for _ = 1, 10 do
 end
 near(RuntimeHeight.GetEffectiveHeightCentimeters(), 30, 0.001, "same-player wrapper transition")
 assert(RuntimeHeight.IsAvailable(), "compatible graph should be available")
+assert(not RuntimeHeight.IsCompatibilityPending(), "compatible graph should not be pending")
 near(RuntimeHeight.GetEstimatedHeightCentimeters(), 201, 0.001, "estimated maximum height")
 
 -- Suppression and restoration each complete through the same 100 ms blend.
