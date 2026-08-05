@@ -560,7 +560,7 @@ function ImmersiveFirstPerson.Init()
                 RuntimeHeight.MarkDirty()
             end
 
-            if Config.inner.heightAdjustmentAmount > 12 then
+            if Config.inner.heightAdjustmentAmount > 13 then
                 ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.25, 0.25, 1.0)
                 ImGui.TextWrapped(
                     "Above +12 cm is experimental: knees, authored contacts, and transitions may look wrong."
