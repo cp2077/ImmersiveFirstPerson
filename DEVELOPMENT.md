@@ -115,5 +115,5 @@ scripts\deploy.ps1 -GameRoot C:\path\to\Cyberpunk2077 -CMake C:\path\to\cmake.ex
 Release build:
 
 ```bash
-MOD_VERSION=2.0.0 NATIVE_DLL=build/native/Release/ImmersiveFirstPerson.dll bash bundle.sh
+MOD_VERSION=2.0.0 NATIVE_DLL=build/native/Release/ImmersiveFirstPerson.dll bash scripts/bundle.sh
 ```

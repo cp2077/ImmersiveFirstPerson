@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repository_root="$(cd -- "$script_dir/.." && pwd)"
+cd "$repository_root"
+
 mod_version="${MOD_VERSION:-0.0.0-dev}"
 native_dll="${NATIVE_DLL:-build/native/Release/ImmersiveFirstPerson.dll}"
 height_archive="${HEIGHT_ARCHIVE:-optional/ImmersiveFirstPersonHeight.archive}"

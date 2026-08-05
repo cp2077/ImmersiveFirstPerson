@@ -137,7 +137,7 @@ jobs:
           MOD_VERSION: ${{ steps.release.outputs.version }}
           NATIVE_DLL: native-artifact/ImmersiveFirstPerson.dll
         run: |
-          bash bundle.sh
+          bash scripts/bundle.sh
 
           archive="build/Immersive First Person.zip"
           archive_root="bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerson/"
