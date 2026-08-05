@@ -537,7 +537,7 @@ function ImmersiveFirstPerson.Init()
         else
             ImGui.TextDisabled("Height slider unavailable")
             ImGui.TextWrapped(
-                "The optional height archive is not installed, is incompatible, or is overridden by another player animgraph."
+                "The bundled height override is missing, incompatible, or overridden by another player animgraph."
             )
         end
 

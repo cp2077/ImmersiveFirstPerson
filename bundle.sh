@@ -16,7 +16,7 @@ fi
 native_dll="$(realpath "$native_dll")"
 
 if [[ ! -f "$height_archive" ]]; then
-    echo "Optional height archive was not found at '$height_archive'; set HEIGHT_ARCHIVE" >&2
+    echo "Height archive was not found at '$height_archive'; set HEIGHT_ARCHIVE" >&2
     exit 1
 fi
 height_archive="$(realpath "$height_archive")"
@@ -27,6 +27,7 @@ cd build
 mkdir -p bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerson/
 mkdir -p red4ext/plugins/ImmersiveFirstPerson/
 mkdir -p r6/scripts/ImmersiveFirstPerson/
+mkdir -p archive/pc/mod/
 staged_init="bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerson/init.lua"
 cp ../init.lua "$staged_init"
 
@@ -44,10 +45,6 @@ fi
 cp -r ../Modules bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerson/
 cp "$native_dll" red4ext/plugins/ImmersiveFirstPerson/ImmersiveFirstPerson.dll
 cp ../r6/scripts/ImmersiveFirstPerson/LookAt.reds r6/scripts/ImmersiveFirstPerson/LookAt.reds
-zip -r "Immersive First Person.zip" bin red4ext r6
-rm -rf bin red4ext r6
-
-mkdir -p archive/pc/mod
 cp "$height_archive" archive/pc/mod/ImmersiveFirstPersonHeight.archive
-zip -r "Immersive First Person - Optional Height.zip" archive
-rm -rf archive
+zip -r "Immersive First Person.zip" bin red4ext r6 archive
+rm -rf bin red4ext r6 archive

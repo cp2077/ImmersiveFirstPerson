@@ -87,11 +87,11 @@ local function inspectGraph(player)
     state.nativeAvailable = true
     state.graphStatus = tonumber(result) or GRAPH_STATUS.WAITING
     if state.graphStatus == GRAPH_STATUS.COMPATIBLE then
-        setStatus("optional height graph ready")
+        setStatus("height graph ready")
     elseif state.graphStatus == GRAPH_STATUS.INCOMPATIBLE then
-        setStatus("optional height graph is incompatible")
+        setStatus("height graph is incompatible")
     elseif state.graphStatus == GRAPH_STATUS.MISSING_OR_OVERRIDDEN then
-        setStatus("optional height archive missing or overridden")
+        setStatus("height archive missing or overridden")
     else
         setStatus("waiting for player animation graph")
     end

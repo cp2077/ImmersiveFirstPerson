@@ -156,24 +156,17 @@ jobs:
             case "$entry" in
               "${archive_root}init.lua"|"${archive_root}Modules/"*.lua|\
               "red4ext/plugins/ImmersiveFirstPerson/ImmersiveFirstPerson.dll"|\
-              "r6/scripts/ImmersiveFirstPerson/LookAt.reds") ;;
+              "r6/scripts/ImmersiveFirstPerson/LookAt.reds"|\
+              "archive/pc/mod/ImmersiveFirstPersonHeight.archive") ;;
               *) echo "Unexpected archive entry: $entry" >&2; exit 1 ;;
             esac
           done < <(unzip -Z1 "$archive")
 
-          height_archive="build/Immersive First Person - Optional Height.zip"
-          unzip -t "$height_archive"
-          [[ "$(unzip -Z1 "$height_archive")" == $'archive/\narchive/pc/\narchive/pc/mod/\narchive/pc/mod/ImmersiveFirstPersonHeight.archive' ]] || {
-            echo "Optional height package contains unexpected entries" >&2
+          height_entry_count=$(unzip -Z1 "$archive" | grep -Fc 'archive/pc/mod/ImmersiveFirstPersonHeight.archive' || true)
+          [[ "$height_entry_count" -eq 1 ]] || {
+            echo "Main package must contain the height archive exactly once" >&2
             exit 1
           }
-
-      - name: Retain the optional height package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: optional-height-package
-          path: build/Immersive First Person - Optional Height.zip
-          if-no-files-found: error
 
       - name: Upload the release to Nexus Mods
         uses: Nexus-Mods/upload-action@c96019556046053aa26044b44396cd38929daf23 # v1.0.0-beta.10
@@ -189,23 +182,5 @@ jobs:
           primary_mod_manager_download: true
           allow_mod_manager_download: true
           update_mod_version: true
-          mod_id: ${{ vars.NEXUSMODS_MOD_ID }}
-          changelog: ${{ steps.release.outputs.changelog }}
-
-      - name: Upload the optional height archive to Nexus Mods
-        if: ${{ vars.NEXUSMODS_HEIGHT_FILE_ID != '' }}
-        uses: Nexus-Mods/upload-action@c96019556046053aa26044b44396cd38929daf23 # v1.0.0-beta.10
-        with:
-          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
-          file_id: ${{ vars.NEXUSMODS_HEIGHT_FILE_ID }}
-          filename: build/Immersive First Person - Optional Height.zip
-          display_name: Immersive First Person - Optional Height
-          description: Optional runtime-adjustable full-height animgraph. The main file remains functional when this file is absent or overridden.
-          version: ${{ steps.release.outputs.version }}
-          category: optional
-          archive_existing_version: false
-          primary_mod_manager_download: false
-          allow_mod_manager_download: true
-          update_mod_version: false
           mod_id: ${{ vars.NEXUSMODS_MOD_ID }}
           changelog: ${{ steps.release.outputs.changelog }}
