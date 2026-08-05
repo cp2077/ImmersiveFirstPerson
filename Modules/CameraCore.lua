@@ -14,7 +14,7 @@ local MODE = {
 }
 
 local BODY_WEAPON_FADE_OUT_DURATION = 0.00
-local BODY_WEAPON_FADE_IN_DURATION = 0.25
+local BODY_WEAPON_FADE_IN_DURATION = 0.15
 -- Empty-hands state arrives before the outgoing weapon camera has necessarily
 -- stopped rewriting the component-local transform. A neutral write is not a
 -- useful ownership test because the weapon camera can replace it with the same
