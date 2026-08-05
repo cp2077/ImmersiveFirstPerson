@@ -19,7 +19,6 @@ function Helpers.Log(message)
     end
 
     local text = "[ImmersiveFirstPerson] " .. tostring(message)
-    print(text)
     if spdlog and spdlog.info then
         spdlog.info(text)
     end
