@@ -290,15 +290,19 @@ $wrapperTemplate = @'
 '@
 
 if ($Placement -eq 'GroundedFullHeight') {
-    $halfDelta = $DeltaMeters * 0.5
-    # The actual leg segment translations are mirrored local X in both player
-    # rigs. Extend each thigh and shin by half the COG rise, then let the Hips
-    # parent constraint raise pelvis/camera by the complete requested amount.
+    $hipDelta = $DeltaMeters * 0.20
+    $thighDelta = $DeltaMeters * 0.30
+    $shinDelta = $DeltaMeters * 0.50
+    # Hips local X/Y for world-down, averaged across the male and female rigs.
+    $hipX = $hipDelta * -0.972978192
+    $hipY = $hipDelta * 0.230897029
     $translations = @(
-        [pscustomobject]@{ Debug = 'ImmersiveFirstPerson_Left_Thigh_Extension'; Bone = 'LeftLeg'; X = $halfDelta; Y = 0.0; Z = 0.0 },
-        [pscustomobject]@{ Debug = 'ImmersiveFirstPerson_Left_Shin_Extension'; Bone = 'LeftFoot'; X = $halfDelta; Y = 0.0; Z = 0.0 },
-        [pscustomobject]@{ Debug = 'ImmersiveFirstPerson_Right_Thigh_Extension'; Bone = 'RightLeg'; X = -$halfDelta; Y = 0.0; Z = 0.0 },
-        [pscustomobject]@{ Debug = 'ImmersiveFirstPerson_Right_Shin_Extension'; Bone = 'RightFoot'; X = -$halfDelta; Y = 0.0; Z = 0.0 },
+        [pscustomobject]@{ Debug = 'ImmersiveFirstPerson_Left_Hip_Root_Offset'; Bone = 'LeftUpLeg'; X = $hipX; Y = $hipY; Z = 0.0 },
+        [pscustomobject]@{ Debug = 'ImmersiveFirstPerson_Left_Thigh_Extension'; Bone = 'LeftLeg'; X = $thighDelta; Y = 0.0; Z = 0.0 },
+        [pscustomobject]@{ Debug = 'ImmersiveFirstPerson_Left_Shin_Extension'; Bone = 'LeftFoot'; X = $shinDelta; Y = 0.0; Z = 0.0 },
+        [pscustomobject]@{ Debug = 'ImmersiveFirstPerson_Right_Hip_Root_Offset'; Bone = 'RightUpLeg'; X = $hipX; Y = $hipY; Z = 0.0 },
+        [pscustomobject]@{ Debug = 'ImmersiveFirstPerson_Right_Thigh_Extension'; Bone = 'RightLeg'; X = -$thighDelta; Y = 0.0; Z = 0.0 },
+        [pscustomobject]@{ Debug = 'ImmersiveFirstPerson_Right_Shin_Extension'; Bone = 'RightFoot'; X = -$shinDelta; Y = 0.0; Z = 0.0 },
         [pscustomobject]@{ Debug = $debugName; Bone = 'Torso_COG_Control_JNT'; X = 0.0; Y = 0.0; Z = $DeltaMeters }
     )
 } else {

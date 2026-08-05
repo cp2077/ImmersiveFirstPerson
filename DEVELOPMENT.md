@@ -8,18 +8,20 @@ base\gameplay\anim_graphs\player_base.animgraph
 
 The vanilla file is in `archive\pc\content\basegame_1_engine.archive`.
 
-The solution changes the pose immediately before the graph copies `Torso_Hips_Driver_GRP` to `Hips`. Each signed 50 cm endpoint adds five `TranslateBone` nodes:
+The solution changes the pose immediately before the graph copies `Torso_Hips_Driver_GRP` to `Hips`. Each signed 50 cm endpoint adds seven `TranslateBone` nodes:
 
 ```text
-                            -50 cm      +50 cm
-LeftLeg                    X -0.25 m    X +0.25 m
-LeftFoot                   X -0.25 m    X +0.25 m
-RightLeg                   X +0.25 m    X -0.25 m
-RightFoot                  X +0.25 m    X -0.25 m
-Torso_COG_Control_JNT      Z -0.50 m    Z +0.50 m
+                            -50 cm                 +50 cm
+LeftUpLeg                  X +0.0973, Y -0.0231 m  X -0.0973, Y +0.0231 m
+RightUpLeg                 X +0.0973, Y -0.0231 m  X -0.0973, Y +0.0231 m
+LeftLeg                    X -0.15 m               X +0.15 m
+LeftFoot                   X -0.25 m               X +0.25 m
+RightLeg                   X +0.15 m               X -0.15 m
+RightFoot                  X +0.25 m               X -0.25 m
+Torso_COG_Control_JNT      Z -0.50 m               Z +0.50 m
 ```
 
-The leg axes are mirrored, hence the opposite signs. Each thigh and shin changes by half the endpoint amount. The COG moves the hips and everything above them by the full amount. So the body and camera move, but the feet stay on the ground.
+The added length is split 20% at the hip root, 30% through the thigh and 50% through the calf. The hip vector points down in the local Hips space and is averaged between the male and female rigs. The other leg axes are mirrored, hence the opposite signs. The COG still moves the hips and everything above them by the full amount, so the body and camera move while the feet stay on the ground.
 
 The graph blends between the -50 cm and +50 cm poses. CET writes a value from `0.0` to `1.0` to `ifp_height_blend`; `0.5` is the vanilla pose and is used whenever height is disabled or suppressed.
 
@@ -49,8 +51,8 @@ Known 2.31 files:
 Vanilla graph       373,435 bytes
 SHA-256             DFF7C3BDEF154B9F9CCF87BDCA0FAF3EAC4565E4428714FB52D46F4C4F7D0EB3
 
-Modified graph      376,586 bytes
-SHA-256             05A0FF0C0B7D04B18BC20BF3BA69A532BB284BC00FEAC2689D3B2AABBBA795B7
+Modified graph      377,602 bytes
+SHA-256             6EAC3EDF2FF1A6A2CFF0AA587ACECE9212E31482AC539DEA57765A44604A96C9
 ```
 
 The hash of the outer archive changes between WolvenKit builds for some reason. The graph inside it is stable, so that is what the builder checks.
@@ -89,7 +91,7 @@ The camera moved, but the visible body and weapons stayed below it. At 30 cm the
 
 ### COG plus longer legs
 
-This is the solution we kept. The body and camera moved and the feet stayed grounded. At 30 cm the knees looked wrong and vehicle framing was completely broken, but that test proved the full chain worked. Normal values are much less noticeable. Vehicle hand IK followed the wheel too, although there was a brief mismatch while leaving the vehicle.
+This is the solution we kept. The body and camera moved and the feet stayed grounded. The first version split the added length equally between the thigh and calf, but it stretched the visible knee area too much. Moving 20% into the mostly hidden hip root and using a 20/30/50 hip/thigh/calf split looked fine in the +14 cm test. Vehicle hand IK followed the wheel too, although there was a brief mismatch while leaving the vehicle.
 
 ### Runtime blend
 
