@@ -67,11 +67,14 @@ jobs:
           from pathlib import Path
 
           tag = os.environ["RELEASE_TAG"].strip()
-          tag_match = re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag)
+          tag_match = re.fullmatch(r"v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag)
           if not tag_match:
-              raise SystemExit(f"Release tag must be stable SemVer in the form vMAJOR.MINOR.PATCH; got {tag!r}")
+              raise SystemExit(
+                  f"Release tag must be stable SemVer in the form MAJOR.MINOR.PATCH "
+                  f"or vMAJOR.MINOR.PATCH; got {tag!r}"
+              )
 
-          version = tag[1:]
+          version = tag.removeprefix("v")
           body = os.environ.get("RELEASE_BODY", "").replace("\r\n", "\n").strip()
           sections = re.split(r"(?m)^[ \t]*##[ \t]+Changelog[ \t]*$", body, maxsplit=1)
           if len(sections) != 2:
