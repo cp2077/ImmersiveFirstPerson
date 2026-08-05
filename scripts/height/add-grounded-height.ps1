@@ -290,9 +290,9 @@ $wrapperTemplate = @'
 '@
 
 if ($Placement -eq 'GroundedFullHeight') {
-    $hipDelta = $DeltaMeters * 0.20
-    $thighDelta = $DeltaMeters * 0.30
-    $shinDelta = $DeltaMeters * 0.50
+    $hipDelta = $DeltaMeters * 0.40
+    $thighDelta = $DeltaMeters * 0.25
+    $shinDelta = $DeltaMeters * 0.35
     # Hips local X/Y for world-down, averaged across the male and female rigs.
     $hipX = $hipDelta * -0.972978192
     $hipY = $hipDelta * 0.230897029

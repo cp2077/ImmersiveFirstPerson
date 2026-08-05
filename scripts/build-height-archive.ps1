@@ -18,7 +18,7 @@ $wolvenKitFull = [IO.Path]::GetFullPath($WolvenKit)
 $sourceArchive = Join-Path $gameRootFull 'archive\pc\content\basegame_1_engine.archive'
 $resourcePath = 'base\gameplay\anim_graphs\player_base.animgraph'
 $vanillaHash = 'DFF7C3BDEF154B9F9CCF87BDCA0FAF3EAC4565E4428714FB52D46F4C4F7D0EB3'
-$builtGraphHash = '6EAC3EDF2FF1A6A2CFF0AA587ACECE9212E31482AC539DEA57765A44604A96C9'
+$builtGraphHash = '4DBB05A39639A82A788B0728AF8732D96119ED449AA6B5E979CBD755B7F998CC'
 
 foreach ($required in @($sourceArchive, $wolvenKitFull)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
