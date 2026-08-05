@@ -8,8 +8,9 @@ local MAXIMUM_HEIGHT_CM = 50
 local HEIGHT_RANGE_CM = MAXIMUM_HEIGHT_CM - MINIMUM_HEIGHT_CM
 local NEUTRAL_BLEND = (0 - MINIMUM_HEIGHT_CM) / HEIGHT_RANGE_CM
 local TRANSITION_DURATION = 0.10
-local CONTRACT_POLL_INTERVAL = 0.50
+local CONTRACT_POLL_INTERVAL = 1.00
 local INPUT_NAME = "ifp_height_blend"
+local inputName = nil
 
 local GRAPH_STATUS = {
     WAITING = 0,
@@ -19,8 +20,6 @@ local GRAPH_STATUS = {
 }
 
 local state = {
-    player = nil,
-    playerKey = nil,
     nativeAvailable = nil,
     graphStatus = GRAPH_STATUS.WAITING,
     status = "waiting for player",
@@ -36,22 +35,11 @@ local state = {
     lastLoggedStatus = nil,
 }
 
-local function getPlayerKey(player)
-    if not player then
-        return nil
+local function getInputName()
+    if not inputName then
+        inputName = CName.new(INPUT_NAME)
     end
-
-    local ok, hash = pcall(function()
-        return tostring(player:GetEntityID().hash)
-    end)
-    if ok and hash then
-        return hash
-    end
-
-    -- There is only one local player. Falling back to a stable sentinel is
-    -- safer than comparing CET userdata wrappers, whose identity can change
-    -- between Game.GetPlayer() calls for the same native entity.
-    return "local-player"
+    return inputName
 end
 
 local function clamp(value, minimum, maximum)
@@ -76,10 +64,12 @@ local function setStatus(value)
     logStatus(value)
 end
 
+local function getGraphStatus(player)
+    return player:ImmersiveFirstPersonGetHeightGraphStatus()
+end
+
 local function inspectGraph(player)
-    local ok, result = pcall(function()
-        return player:ImmersiveFirstPersonGetHeightGraphStatus()
-    end)
+    local ok, result = pcall(getGraphStatus, player)
     if not ok then
         state.nativeAvailable = false
         state.graphStatus = GRAPH_STATUS.WAITING
@@ -101,20 +91,28 @@ local function inspectGraph(player)
     return true
 end
 
+local function setLookAtEnabled(player, enabled)
+    return player:ImmersiveFirstPersonSetHeadLookAtEnabled(enabled)
+end
+
 local function configureLookAt(player, enabled)
     if state.lookAtApplied == enabled and not state.dirty then
         return
     end
 
-    local ok = pcall(function()
-        return player:ImmersiveFirstPersonSetHeadLookAtEnabled(enabled)
-    end)
+    local ok = pcall(setLookAtEnabled, player, enabled)
     if ok then
         state.lookAtApplied = enabled
     else
         state.nativeAvailable = false
+        state.graphStatus = GRAPH_STATUS.WAITING
         state.lookAtApplied = nil
+        setStatus("RED4ext native plugin unavailable")
     end
+end
+
+local function setBlendInput(player, name, value)
+    AnimationControllerComponent.SetInputFloat(player, name, value)
 end
 
 local function sendBlend(player, value, force)
@@ -124,15 +122,11 @@ local function sendBlend(player, value, force)
         return true
     end
 
-    local ok = pcall(function()
-        AnimationControllerComponent.SetInputFloat(
-            player,
-            CName.new(INPUT_NAME),
-            value
-        )
-    end)
+    local ok = pcall(setBlendInput, player, getInputName(), value)
     if not ok then
         setStatus("height graph input could not be written")
+        state.graphStatus = GRAPH_STATUS.WAITING
+        state.pollElapsed = CONTRACT_POLL_INTERVAL
         state.lastSentBlend = nil
         return false
     end
@@ -173,9 +167,23 @@ local function updateTransition(delta, player)
     sendBlend(player, state.currentBlend, true)
 end
 
-function RuntimeHeight.MarkDirty()
+function RuntimeHeight.ResetPlayer()
+    state.nativeAvailable = nil
+    state.graphStatus = GRAPH_STATUS.WAITING
+    state.currentBlend = NEUTRAL_BLEND
+    state.startBlend = NEUTRAL_BLEND
+    state.targetBlend = NEUTRAL_BLEND
+    state.transitionElapsed = TRANSITION_DURATION
+    state.lastSentBlend = nil
+    state.lookAtApplied = nil
+    state.suppressionReason = nil
     state.dirty = true
     state.pollElapsed = CONTRACT_POLL_INTERVAL
+    setStatus("waiting for player")
+end
+
+function RuntimeHeight.MarkDirty()
+    state.dirty = true
 end
 
 function RuntimeHeight.Update(
@@ -198,31 +206,17 @@ function RuntimeHeight.Update(
     state.pollElapsed = state.pollElapsed + elapsed
     state.suppressionReason = suppressionReason
 
-    local playerKey = getPlayerKey(player)
-    if playerKey ~= state.playerKey then
-        state.playerKey = playerKey
-        state.graphStatus = GRAPH_STATUS.WAITING
-        state.currentBlend = NEUTRAL_BLEND
-        state.startBlend = NEUTRAL_BLEND
-        state.targetBlend = NEUTRAL_BLEND
-        state.transitionElapsed = TRANSITION_DURATION
-        state.lastSentBlend = nil
-        state.lookAtApplied = nil
-        state.dirty = true
-        state.pollElapsed = CONTRACT_POLL_INTERVAL
-    end
-    -- Keep the current wrapper for native calls, but never use wrapper identity
-    -- to decide whether V changed.
-    state.player = player
-
     if not player then
         setStatus("waiting for player")
         return
     end
 
     configureLookAt(player, lookAtEnabled == true)
+    state.dirty = false
 
-    local shouldPoll = state.dirty or state.pollElapsed >= CONTRACT_POLL_INTERVAL
+    local shouldPoll = state.nativeAvailable ~= false
+        and state.graphStatus == GRAPH_STATUS.WAITING
+        and state.pollElapsed >= CONTRACT_POLL_INTERVAL
     if shouldPoll then
         local wasCompatible = state.graphStatus == GRAPH_STATUS.COMPATIBLE
         state.pollElapsed = 0.0
@@ -241,7 +235,6 @@ function RuntimeHeight.Update(
             state.transitionElapsed = TRANSITION_DURATION
             state.lastSentBlend = nil
         end
-        state.dirty = false
     end
 
     if state.graphStatus ~= GRAPH_STATUS.COMPATIBLE then
@@ -267,12 +260,8 @@ function RuntimeHeight.Shutdown(player)
         sendBlend(player, NEUTRAL_BLEND, true)
     end
     if player then
-        pcall(function()
-            player:ImmersiveFirstPersonSetHeadLookAtEnabled(false)
-        end)
+        pcall(setLookAtEnabled, player, false)
     end
-    state.player = nil
-    state.playerKey = nil
     state.currentBlend = NEUTRAL_BLEND
     state.targetBlend = NEUTRAL_BLEND
     state.lastSentBlend = nil

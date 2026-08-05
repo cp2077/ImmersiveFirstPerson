@@ -91,6 +91,10 @@ if ($modRoot -eq $workspace) {
         if ($LASTEXITCODE -ne 0) {
             throw "Runtime height tests failed with exit code $LASTEXITCODE."
         }
+        & $luaJit (Join-Path $workspace 'tests\player-state-cache.lua')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Player-state cache tests failed with exit code $LASTEXITCODE."
+        }
     } finally {
         Pop-Location
     }

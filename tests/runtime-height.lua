@@ -8,6 +8,8 @@ package.loaded["Modules/Helpers"] = {
 }
 
 local writes = {}
+local graphInspections = 0
+local inputNamesCreated = 0
 AnimationControllerComponent = {
     SetInputFloat = function(player, name, value)
         writes[#writes + 1] = { player = player, name = name, value = value }
@@ -15,6 +17,7 @@ AnimationControllerComponent = {
 }
 CName = {
     new = function(value)
+        inputNamesCreated = inputNamesCreated + 1
         return value
     end,
 }
@@ -26,6 +29,7 @@ local function playerWrapper(entityHash, graphStatus)
             return { hash = entityHash }
         end,
         ImmersiveFirstPersonGetHeightGraphStatus = function()
+            graphInspections = graphInspections + 1
             return graphStatus
         end,
         ImmersiveFirstPersonSetHeadLookAtEnabled = function(_, enabled)
@@ -57,7 +61,18 @@ near(RuntimeHeight.GetEffectiveHeightCentimeters(), 50, 0.001, "same-player wrap
 near(writes[#writes].value, 1, 0.0001, "maximum graph input")
 assert(RuntimeHeight.IsAvailable(), "compatible graph should be available")
 assert(not RuntimeHeight.IsCompatibilityPending(), "compatible graph should not be pending")
+assert(graphInspections == 1, "resolved graph contract should stop polling")
+assert(inputNamesCreated == 1, "height input name should be cached")
 near(RuntimeHeight.GetEstimatedHeightCentimeters(), 221, 0.001, "estimated maximum height")
+
+RuntimeHeight.MarkDirty()
+RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 50, nil)
+assert(graphInspections == 1, "settings changes should not recheck a resolved graph")
+
+RuntimeHeight.ResetPlayer()
+assert(RuntimeHeight.IsCompatibilityPending(), "new player should reset graph compatibility")
+RuntimeHeight.Update(0.016, playerWrapper(43, 1), true, true, 50, nil)
+assert(graphInspections == 2, "new player should receive a fresh graph check")
 
 -- Suppression and restoration each complete through the same 100 ms blend.
 for _ = 1, 10 do
@@ -96,5 +111,6 @@ assert(lookAtWrites[#lookAtWrites] == false, "immersive toggle should disable lo
 RuntimeHeight.Shutdown(playerWrapper(42, 1))
 near(writes[#writes].value, 0.5, 0.0001, "shutdown graph input")
 assert(lookAtWrites[#lookAtWrites] == false, "shutdown should disable look-at redirection")
+assert(graphInspections == 2, "settings and transitions should not recheck a resolved graph")
 
 print(("RuntimeHeight tests passed (%d graph writes, %d log messages)"):format(#writes, #logs))

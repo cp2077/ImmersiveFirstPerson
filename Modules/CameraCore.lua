@@ -165,6 +165,20 @@ local function quaternionCopy(value)
     }
 end
 
+local function copyVectorInto(target, value)
+    target.x = value.x
+    target.y = value.y
+    target.z = value.z
+    target.w = value.w or 1.0
+end
+
+local function copyQuaternionInto(target, value)
+    target.i = value.i
+    target.j = value.j
+    target.k = value.k
+    target.r = value.r
+end
+
 local function toVector(value)
     return Vector4.new(value.x, value.y, value.z, value.w or 1.0)
 end
@@ -186,54 +200,102 @@ local function quaternionMultiplyFallback(a, b)
     )
 end
 
+local function quaternionMultiplyNative(a, b)
+    return Game['OperatorMultiply;QuaternionQuaternion;Quaternion'](a, b)
+end
+
+local quaternionMultiplyImpl = nil
 local function quaternionMultiply(a, b)
-    local ok, value = pcall(function()
-        return Game['OperatorMultiply;QuaternionQuaternion;Quaternion'](a, b)
-    end)
+    if quaternionMultiplyImpl then
+        return quaternionMultiplyImpl(a, b)
+    end
+
+    local ok, value = pcall(quaternionMultiplyNative, a, b)
     if ok and value then
+        quaternionMultiplyImpl = quaternionMultiplyNative
         return value
     end
 
+    quaternionMultiplyImpl = quaternionMultiplyFallback
     return quaternionMultiplyFallback(a, b)
 end
 
-local function quaternionMulInverse(a, b)
-    local ok, value = pcall(function()
-        return Quaternion.MulInverse(a, b)
-    end)
-    if ok and value then
-        return value
-    end
+local function quaternionMulInverseNative(a, b)
+    return Quaternion.MulInverse(a, b)
+end
 
+local function quaternionMulInverseFallback(a, b)
     return quaternionMultiply(a, quaternionConjugate(b))
 end
 
-local function quaternionFromEuler(roll, pitch, yaw)
-    local angles = EulerAngles.new(roll, pitch, yaw)
-    local ok, value = pcall(function()
-        return angles:ToQuat()
-    end)
+local quaternionMulInverseImpl = nil
+local function quaternionMulInverse(a, b)
+    if quaternionMulInverseImpl then
+        return quaternionMulInverseImpl(a, b)
+    end
+
+    local ok, value = pcall(quaternionMulInverseNative, a, b)
     if ok and value then
+        quaternionMulInverseImpl = quaternionMulInverseNative
         return value
     end
 
+    quaternionMulInverseImpl = quaternionMulInverseFallback
+    return quaternionMulInverseFallback(a, b)
+end
+
+local function quaternionFromEulerNative(angles)
+    return angles:ToQuat()
+end
+
+local function quaternionFromEulerFallback(angles)
     return GetSingleton("EulerAngles"):ToQuat(angles)
 end
 
+local quaternionFromEulerImpl = nil
+local function quaternionFromEuler(roll, pitch, yaw)
+    local angles = EulerAngles.new(roll, pitch, yaw)
+    if quaternionFromEulerImpl then
+        return quaternionFromEulerImpl(angles)
+    end
+
+    local ok, value = pcall(quaternionFromEulerNative, angles)
+    if ok and value then
+        quaternionFromEulerImpl = quaternionFromEulerNative
+        return value
+    end
+
+    quaternionFromEulerImpl = quaternionFromEulerFallback
+    return quaternionFromEulerFallback(angles)
+end
+
+local function quaternionAxisAngleNative(x, y, z, radians)
+    return Quaternion.SetAxisAngle(Vector4.new(x, y, z, 0.0), radians)
+end
+
+local function quaternionAxisAngleFallback(x, y, z, radians)
+    local halfAngle = radians * 0.5
+    local sine = math.sin(halfAngle)
+    return Quaternion.new(x * sine, y * sine, z * sine, math.cos(halfAngle))
+end
+
+local quaternionAxisAngleImpl = nil
 local function quaternionAxisAngle(x, y, z, degrees)
     local radians = math.rad(degrees)
-    local ok, value = pcall(function()
-        return Quaternion.SetAxisAngle(Vector4.new(x, y, z, 0.0), radians)
-    end)
+    if quaternionAxisAngleImpl then
+        return quaternionAxisAngleImpl(x, y, z, radians)
+    end
+
+    local ok, value = pcall(quaternionAxisAngleNative, x, y, z, radians)
     if ok and value then
+        quaternionAxisAngleImpl = quaternionAxisAngleNative
         return value
     end
 
     -- The axes used below are unit vectors, so the direct construction is also
     -- useful in Lua-only tests where REDengine's static helper is unavailable.
-    local halfAngle = radians * 0.5
-    local sine = math.sin(halfAngle)
-    return Quaternion.new(x * sine, y * sine, z * sine, math.cos(halfAngle))
+    quaternionAxisAngleImpl = quaternionAxisAngleFallback
+    return quaternionAxisAngleFallback(x, y, z, radians)
 end
 
 local function headLocalOrientation(
@@ -266,50 +328,91 @@ local function headLocalOrientation(
     return quaternionMultiply(orientation, toQuaternion(baselineOrientation))
 end
 
-local function quaternionToEuler(value)
-    local ok, angles = pcall(function()
-        return value:ToEulerAngles()
-    end)
-    if ok and angles then
-        return angles
-    end
+local function quaternionToEulerNative(value)
+    return value:ToEulerAngles()
+end
 
+local function quaternionToEulerFallback(value)
     return GetSingleton("Quaternion"):ToEulerAngles(value)
 end
 
-local function matrixToQuaternion(matrix)
-    local ok, value = pcall(function()
-        return matrix:ToQuat()
-    end)
-    if ok and value then
-        return value
+local quaternionToEulerImpl = nil
+local function quaternionToEuler(value)
+    if quaternionToEulerImpl then
+        return quaternionToEulerImpl(value)
     end
 
+    local ok, angles = pcall(quaternionToEulerNative, value)
+    if ok and angles then
+        quaternionToEulerImpl = quaternionToEulerNative
+        return angles
+    end
+
+    quaternionToEulerImpl = quaternionToEulerFallback
+    return quaternionToEulerFallback(value)
+end
+
+local function matrixToQuaternionNative(matrix)
+    return matrix:ToQuat()
+end
+
+local function matrixToQuaternionFallback(matrix)
     local rotation = matrix:GetRotation()
     return quaternionFromEuler(rotation.roll, rotation.pitch, rotation.yaw)
 end
 
-local function quaternionForward(value)
-    local ok, forward = pcall(function()
-        return value:GetForward()
-    end)
-    if ok and forward then
-        return forward
+local matrixToQuaternionImpl = nil
+local function matrixToQuaternion(matrix)
+    if matrixToQuaternionImpl then
+        return matrixToQuaternionImpl(matrix)
     end
 
+    local ok, value = pcall(matrixToQuaternionNative, matrix)
+    if ok and value then
+        matrixToQuaternionImpl = matrixToQuaternionNative
+        return value
+    end
+
+    matrixToQuaternionImpl = matrixToQuaternionFallback
+    return matrixToQuaternionFallback(matrix)
+end
+
+local function quaternionForwardNative(value)
+    return value:GetForward()
+end
+
+local function quaternionForwardFallback(value)
     return GetSingleton("Quaternion"):GetForward(value)
 end
 
-local function getNativeOrientation(fpp, actualLocalOrientation)
-    local ok, orientation = pcall(function()
-        local worldMatrix = fpp:GetLocalToWorld()
-        if not worldMatrix then
-            return nil
-        end
+local quaternionForwardImpl = nil
+local function quaternionForward(value)
+    if quaternionForwardImpl then
+        return quaternionForwardImpl(value)
+    end
 
-        local worldOrientation = matrixToQuaternion(worldMatrix)
-        return quaternionMulInverse(worldOrientation, actualLocalOrientation)
-    end)
+    local ok, forward = pcall(quaternionForwardNative, value)
+    if ok and forward then
+        quaternionForwardImpl = quaternionForwardNative
+        return forward
+    end
+
+    quaternionForwardImpl = quaternionForwardFallback
+    return quaternionForwardFallback(value)
+end
+
+local function calculateNativeOrientation(fpp, actualLocalOrientation)
+    local worldMatrix = fpp:GetLocalToWorld()
+    if not worldMatrix then
+        return nil
+    end
+
+    local worldOrientation = matrixToQuaternion(worldMatrix)
+    return quaternionMulInverse(worldOrientation, actualLocalOrientation)
+end
+
+local function getNativeOrientation(fpp, actualLocalOrientation)
+    local ok, orientation = pcall(calculateNativeOrientation, fpp, actualLocalOrientation)
 
     if ok and orientation then
         return orientation
@@ -317,26 +420,28 @@ local function getNativeOrientation(fpp, actualLocalOrientation)
     return nil
 end
 
+local function calculateNativePitch(nativeOrientation)
+    local forward = quaternionForward(nativeOrientation)
+    if not forward or not finite(forward.z) then
+        return nil
+    end
+
+    local fromForward = math.deg(math.asin(clamp(forward.z, -1.0, 1.0)))
+
+    -- REDengine's forward-axis sign has changed in tooling representations before.
+    -- Choose the forward-derived sign that agrees with the recovered quaternion.
+    local euler = quaternionToEuler(nativeOrientation)
+    local eulerPitch = euler and (euler.pitch or euler.Pitch)
+    if finite(eulerPitch)
+        and math.abs(-fromForward - eulerPitch) < math.abs(fromForward - eulerPitch) then
+        fromForward = -fromForward
+    end
+
+    return fromForward
+end
+
 local function nativePitchFromOrientation(nativeOrientation)
-    local ok, pitch = pcall(function()
-        local forward = quaternionForward(nativeOrientation)
-        if not forward or not finite(forward.z) then
-            return nil
-        end
-
-        local fromForward = math.deg(math.asin(clamp(forward.z, -1.0, 1.0)))
-
-        -- REDengine's forward-axis sign has changed in tooling representations before.
-        -- Choose the forward-derived sign that agrees with the recovered quaternion.
-        local euler = quaternionToEuler(nativeOrientation)
-        local eulerPitch = euler and (euler.pitch or euler.Pitch)
-        if finite(eulerPitch)
-            and math.abs(-fromForward - eulerPitch) < math.abs(fromForward - eulerPitch) then
-            fromForward = -fromForward
-        end
-
-        return fromForward
-    end)
+    local ok, pitch = pcall(calculateNativePitch, nativeOrientation)
 
     if ok and finite(pitch) then
         return pitch
@@ -349,28 +454,50 @@ local function getNativePitch(fpp, actualLocalOrientation)
     return nativeOrientation and nativePitchFromOrientation(nativeOrientation) or nil
 end
 
+local function readProperty(object, property)
+    return object[property]
+end
+
 local function readNumberProperty(object, property, fallback)
-    local ok, value = pcall(function()
-        return object[property]
-    end)
+    local ok, value = pcall(readProperty, object, property)
     if ok and finite(value) then
         return value
     end
     return fallback
 end
 
+local function readCameraZoom(fpp)
+    return fpp:GetZoom()
+end
+
+local cameraZoomReader = nil
+
 local function getCameraZoom(fpp)
     -- The live aim/scanner zoom is exposed through GetZoom(). Reading the Lua
     -- wrapper field only returns a stale/default value on current CET builds.
-    local ok, zoom = pcall(function()
-        return fpp:GetZoom()
-    end)
-    if ok and finite(zoom) and zoom > 0.05 then
-        return zoom
+    if cameraZoomReader ~= false then
+        if cameraZoomReader then
+            local zoom = cameraZoomReader(fpp)
+            if finite(zoom) and zoom > 0.05 then
+                return zoom
+            end
+        else
+            local ok, zoom = pcall(readCameraZoom, fpp)
+            if ok and finite(zoom) and zoom > 0.05 then
+                cameraZoomReader = readCameraZoom
+                return zoom
+            elseif not ok then
+                cameraZoomReader = false
+            end
+        end
     end
 
-    zoom = readNumberProperty(fpp, "zoom", 1.0)
+    local zoom = readNumberProperty(fpp, "zoom", 1.0)
     return zoom > 0.05 and zoom or 1.0
+end
+
+local function setLocalTransform(fpp, position, orientation)
+    fpp:SetLocalTransform(position, orientation)
 end
 
 local function lockNativeInput()
@@ -428,12 +555,12 @@ local function releaseCamera(fpp)
     end
 
     if fpp then
-        pcall(function()
-            fpp:SetLocalTransform(
-                toVector(runtime.baseline.position),
-                toQuaternion(runtime.baseline.orientation)
-            )
-        end)
+        pcall(
+            setLocalTransform,
+            fpp,
+            toVector(runtime.baseline.position),
+            toQuaternion(runtime.baseline.orientation)
+        )
     end
 
     runtime.ownsCamera = false
@@ -1344,17 +1471,18 @@ local function composeAndWrite(fpp, context)
         )
     end
 
-    local ok = pcall(function()
-        fpp:SetLocalTransform(toVector(position), orientation)
-    end)
+    local ok = pcall(setLocalTransform, fpp, toVector(position), orientation)
     if not ok then
         return false
     end
 
-    runtime.lastApplied = {
-        position = position,
-        orientation = quaternionCopy(orientation),
-    }
+    local lastApplied = runtime.lastApplied
+    if not lastApplied then
+        lastApplied = { position = {}, orientation = {} }
+        runtime.lastApplied = lastApplied
+    end
+    copyVectorInto(lastApplied.position, position)
+    copyQuaternionInto(lastApplied.orientation, orientation)
     if runtime.bodyTransition.active
         and runtime.bodyTransition.target > runtime.bodyTransition.from then
         runtime.bodyTransition.probeWritten = true

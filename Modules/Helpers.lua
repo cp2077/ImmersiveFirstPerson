@@ -1,6 +1,70 @@
 local Helpers = {}
 local debugLoggingEnabled = true
 
+local session = {
+    player = nil,
+    blackboard = nil,
+    definition = nil,
+    workspotSystem = nil,
+    transactionSystem = nil,
+    weaponSlot = nil,
+}
+
+local function clearSession()
+    session.player = nil
+    session.blackboard = nil
+    session.definition = nil
+    session.workspotSystem = nil
+    session.transactionSystem = nil
+    session.weaponSlot = nil
+end
+
+local function getFPPComponent(player)
+    return player:GetFPPCameraComponent()
+end
+
+local function attachPlayer(player)
+    clearSession()
+    session.player = player
+    if not player then
+        return false
+    end
+
+    local definitions = Game.GetAllBlackboardDefs()
+    local blackboardSystem = Game.GetBlackboardSystem()
+    session.definition = definitions and definitions.PlayerStateMachine or nil
+    if session.definition and blackboardSystem then
+        session.blackboard = blackboardSystem:GetLocalInstanced(
+            player:GetEntityID(),
+            session.definition
+        )
+    end
+    session.workspotSystem = Game.GetWorkspotSystem()
+    session.transactionSystem = Game.GetTransactionSystem()
+    session.weaponSlot = TweakDBID.new("AttachmentSlots.WeaponRight")
+    return session.blackboard ~= nil
+end
+
+function Helpers.AttachPlayer(player)
+    local ok, attached = pcall(attachPlayer, player)
+    if not ok then
+        clearSession()
+        return false
+    end
+    return attached
+end
+
+function Helpers.DetachPlayer()
+    clearSession()
+end
+
+function Helpers.GetPlayer()
+    if not session.player then
+        Helpers.AttachPlayer(Game.GetPlayer())
+    end
+    return session.player
+end
+
 function Helpers.PrintMsg(message)
     print("[ImmersiveFirstPerson] " .. tostring(message))
 end
@@ -19,9 +83,10 @@ function Helpers.Log(message)
     end
 
     local text = "[ImmersiveFirstPerson] " .. tostring(message)
-    -- CET release builds buffer info messages until shutdown, but flush warnings immediately.
-    if spdlog and spdlog.warning then
-        spdlog.warning(text)
+    -- CET release builds flush warnings immediately. Routine diagnostics should
+    -- stay at info level so camera-state transitions do not force disk flushes.
+    if spdlog and spdlog.info then
+        spdlog.info(text)
     end
 end
 
@@ -32,12 +97,17 @@ function Helpers.RaiseError(message)
 end
 
 function Helpers.GetFPP()
-    local player = Game.GetPlayer()
+    local player = Helpers.GetPlayer()
     if not player then
         return nil
     end
 
-    return player:GetFPPCameraComponent()
+    local ok, fpp = pcall(getFPPComponent, player)
+    if not ok then
+        clearSession()
+        return nil
+    end
+    return fpp
 end
 
 function Helpers.GetFOV(fpp)
@@ -57,69 +127,87 @@ function Helpers.HasBVFP()
     return GetMod("BetterVehicleFirstPerson") ~= nil
 end
 
-local function getPlayerBlackboard()
-    local player = Game.GetPlayer()
-    if not player then
-        return nil, nil
-    end
-
-    local definitions = Game.GetAllBlackboardDefs()
-    local system = Game.GetBlackboardSystem()
-    if not definitions or not definitions.PlayerStateMachine or not system then
-        return nil, nil
-    end
-
-    local blackboard = system:GetLocalInstanced(player:GetEntityID(), definitions.PlayerStateMachine)
-    if not blackboard then
-        return nil, nil
-    end
-
-    return blackboard, definitions.PlayerStateMachine
+local function blackboardInt(blackboard, definition, fieldName, fallback)
+    local field = definition[fieldName]
+    return field and blackboard:GetInt(field) or fallback
 end
 
-local function readPlayerStateInt(fieldName, fallback)
-    local ok, value = pcall(function()
-        local blackboard, definition = getPlayerBlackboard()
-        local field = definition and definition[fieldName]
-        if not blackboard or not field then
-            return fallback
-        end
-        return blackboard:GetInt(field)
-    end)
-
-    if ok then
-        return value
-    end
-    return fallback
+local function blackboardBool(blackboard, definition, fieldName, fallback)
+    local field = definition[fieldName]
+    return field and blackboard:GetBool(field) or fallback
 end
 
-local function readPlayerStateBool(fieldName, fallback)
-    local ok, value = pcall(function()
-        local blackboard, definition = getPlayerBlackboard()
-        local field = definition and definition[fieldName]
-        if not blackboard or not field then
-            return fallback
-        end
-        return blackboard:GetBool(field)
-    end)
-
-    if ok then
-        return value
+local function refreshPlayerState(target)
+    local player = session.player
+    local blackboard = session.blackboard
+    local definition = session.definition
+    if not player or not blackboard or not definition then
+        return nil
     end
-    return fallback
+
+    local detailedLocomotion = blackboardInt(blackboard, definition, "LocomotionDetailed", 0)
+    local highLevel = blackboardInt(blackboard, definition, "HighLevel", 0)
+    local vehicleState = blackboardInt(blackboard, definition, "Vehicle", 0)
+    local landingState = blackboardInt(blackboard, definition, "Landing", 0)
+    local remoteVehicleID = definition.EntityIDVehicleRemoteControlled
+        and blackboard:GetEntityID(definition.EntityIDVehicleRemoteControlled)
+        or nil
+    local remoteVehicleHash = remoteVehicleID and remoteVehicleID.hash or nil
+    local inspectionComponent = player:GetInspectionComponent()
+    local playerState = player:GetPS()
+    local mountedVehicle = Game['GetMountedVehicle;GameObject'](player)
+    local knockedDown = detailedLocomotion == 29
+        or detailedLocomotion == 31
+        or landingState > 1
+        or StatusEffectSystem.ObjectHasStatusEffectOfType(player, "VehicleKnockdown")
+        or StatusEffectSystem.ObjectHasStatusEffectOfType(player, "BikeKnockdown")
+
+    target.sceneTier = blackboardInt(blackboard, definition, "SceneTier", 0)
+    target.hasWeapon = session.transactionSystem ~= nil
+        and session.transactionSystem:GetItemInSlot(player, session.weaponSlot) ~= nil
+    target.weaponState = blackboardInt(blackboard, definition, "Weapon", 0)
+    target.upperBodyState = blackboardInt(blackboard, definition, "UpperBody", 0)
+    target.vitalsState = blackboardInt(blackboard, definition, "Vitals", 0)
+    target.inVehicle = vehicleState ~= 0 or mountedVehicle ~= nil
+    target.remoteVehicle = remoteVehicleHash ~= nil and remoteVehicleHash ~= 0ULL
+    target.deviceCamera = blackboardBool(blackboard, definition, "IsControllingDevice", false)
+        or blackboardBool(blackboard, definition, "IsControllingCamera", false)
+        or blackboardBool(blackboard, definition, "IsUIZoomDevice", false)
+    target.inMinigame = blackboardBool(blackboard, definition, "IsInMinigame", false)
+    target.inspecting = inspectionComponent ~= nil
+        and inspectionComponent:GetIsPlayerInspecting() == true
+    target.forceOpeningDoor = blackboardBool(
+        blackboard,
+        definition,
+        "IsForceOpeningDoor",
+        false
+    )
+    target.swimming = highLevel == 6
+        or blackboardInt(blackboard, definition, "Swimming", 0) > 0
+    target.takingDown = blackboardInt(blackboard, definition, "Takedown", 0) > 0
+    target.carryingBody = blackboardInt(blackboard, definition, "BodyCarrying", 0) > 0
+    target.felled = detailedLocomotion == 31
+    target.onLadder = detailedLocomotion >= 10 and detailedLocomotion <= 13
+    target.consumableState = blackboardInt(blackboard, definition, "Consumable", 0)
+    target.traversal = detailedLocomotion >= 8 and detailedLocomotion <= 13
+    target.inWorkspot = session.workspotSystem ~= nil
+        and session.workspotSystem:IsActorInWorkspot(player) == true
+    target.knockedDown = knockedDown == true
+    target.crouching = playerState ~= nil and playerState:IsCrouch() == true
+    return target
 end
 
-local function readPlayerStateEntityID(fieldName)
-    local ok, value = pcall(function()
-        local blackboard, definition = getPlayerBlackboard()
-        local field = definition and definition[fieldName]
-        if not blackboard or not field then
-            return nil
-        end
-        return blackboard:GetEntityID(field)
-    end)
+function Helpers.RefreshPlayerState(target)
+    target = target or {}
+    local ok, refreshed = pcall(refreshPlayerState, target)
+    if ok and refreshed then
+        return refreshed
+    end
 
-    return ok and value or nil
+    -- Do not retry against a possibly stale native object. Drop every retained
+    -- session reference and let the next update bind the current player cleanly.
+    clearSession()
+    return nil
 end
 
 local function getGameSetting(path)
@@ -131,195 +219,6 @@ local function getGameSetting(path)
 
     local variable = settingsSystem:GetVar(groupPath, variableName)
     return variable and variable:GetValue() or nil
-end
-
-function Helpers.GetSceneTier()
-    return readPlayerStateInt("SceneTier", 0)
-end
-
-function Helpers.GetHighLevelState()
-    return readPlayerStateInt("HighLevel", 0)
-end
-
-function Helpers.GetDetailedLocomotionState()
-    return readPlayerStateInt("LocomotionDetailed", 0)
-end
-
-function Helpers.GetUpperBodyState()
-    return readPlayerStateInt("UpperBody", 0)
-end
-
-function Helpers.GetWeaponState()
-    return readPlayerStateInt("Weapon", 0)
-end
-
-function Helpers.GetVitalsState()
-    return readPlayerStateInt("Vitals", 0)
-end
-
-function Helpers.GetVehicleState()
-    return readPlayerStateInt("Vehicle", 0)
-end
-
-function Helpers.GetConsumableState()
-    return readPlayerStateInt("Consumable", 0)
-end
-
-function Helpers.IsTraversalLocomotion()
-    local state = Helpers.GetDetailedLocomotionState()
-    -- gamePSMDetailedLocomotionStates: Climb, Vault, and the four ladder states.
-    return state >= 8 and state <= 13
-end
-
-function Helpers.IsOnLadder()
-    local state = Helpers.GetDetailedLocomotionState()
-    -- gamePSMDetailedLocomotionStates: Ladder through LadderJump.
-    return state >= 10 and state <= 13
-end
-
-function Helpers.IsFelled()
-    -- gamePSMDetailedLocomotionStates.Felled. Unlike an ordinary hard landing,
-    -- this state installs a dedicated camera profile above locomotion.
-    return Helpers.GetDetailedLocomotionState() == 31
-end
-
-function Helpers.IsTakingDown()
-    return readPlayerStateInt("Takedown", 0)
-end
-
-function Helpers.IsCarryingBody()
-    return readPlayerStateInt("BodyCarrying", 0) > 0
-end
-
-function Helpers.IsSwimming()
-    -- Surface, dive, and swim-climb are separate locomotion states. Their
-    -- low-level Swimming value is cleared between transitions, sometimes long
-    -- enough for CET to observe a false "left the water" frame. HighLevel stays
-    -- at gamePSMHighLevel.Swimming (6) for the complete water session.
-    return Helpers.GetHighLevelState() == 6
-        or readPlayerStateInt("Swimming", 0) > 0
-end
-
-function Helpers.IsKnockedDown()
-    local detailedState = Helpers.GetDetailedLocomotionState()
-    if detailedState == 29 or detailedState == 31 then
-        -- The previous status/landing-only test missed the generic Knockdown
-        -- and Felled states, leaving freelook active inside their animations.
-        return true
-    end
-
-    if readPlayerStateInt("Landing", 0) > 1 then
-        return true
-    end
-
-    local player = Game.GetPlayer()
-    if not player then
-        return false
-    end
-
-    local ok, knockedDown = pcall(function()
-        return StatusEffectSystem.ObjectHasStatusEffectOfType(player, "VehicleKnockdown")
-            or StatusEffectSystem.ObjectHasStatusEffectOfType(player, "BikeKnockdown")
-    end)
-    return ok and knockedDown or false
-end
-
-function Helpers.HasRemoteControlledVehicle()
-    local vehicleID = readPlayerStateEntityID("EntityIDVehicleRemoteControlled")
-    if not vehicleID then
-        return false
-    end
-
-    -- EntityID from a blackboard is a CET value type. Reading its hash avoids a
-    -- dependency on a script-side static helper that may not be RTTI-exported.
-    local ok, hash = pcall(function()
-        return vehicleID.hash
-    end)
-    return ok and hash ~= nil and hash ~= 0ULL
-end
-
-function Helpers.IsDeviceCameraActive()
-    return readPlayerStateBool("IsControllingDevice", false)
-        or readPlayerStateBool("IsControllingCamera", false)
-        or readPlayerStateBool("IsUIZoomDevice", false)
-end
-
-function Helpers.IsInMinigame()
-    return readPlayerStateBool("IsInMinigame", false)
-end
-
-function Helpers.IsForceOpeningDoor()
-    return readPlayerStateBool("IsForceOpeningDoor", false)
-end
-
-function Helpers.IsInspecting()
-    local player = Game.GetPlayer()
-    if not player then
-        return false
-    end
-
-    local ok, inspecting = pcall(function()
-        local component = player:GetInspectionComponent()
-        return component and component:GetIsPlayerInspecting()
-    end)
-    return ok and inspecting == true
-end
-
-function Helpers.HasMountedVehicle()
-    local player = Game.GetPlayer()
-    return player ~= nil and Game['GetMountedVehicle;GameObject'](player) ~= nil
-end
-
-function Helpers.IsInWorkspot()
-    local player = Game.GetPlayer()
-    local workspotSystem = Game.GetWorkspotSystem()
-    if not player or not workspotSystem then
-        return false
-    end
-
-    local ok, active = pcall(function()
-        return workspotSystem:IsActorInWorkspot(player)
-    end)
-    return ok and active == true
-end
-
-function Helpers.IsInVehicle()
-    local player = Game.GetPlayer()
-    if not player then
-        return false
-    end
-
-    local workspotSystem = Game.GetWorkspotSystem()
-    if not workspotSystem or not workspotSystem:IsActorInWorkspot(player) then
-        return false
-    end
-
-    local ok, isInVehicle = pcall(function()
-        local info = workspotSystem:GetExtendedInfo(player)
-        return info and info.isActive and Helpers.HasMountedVehicle()
-    end)
-    return ok and isInVehicle or false
-end
-
-function Helpers.HasWeapon()
-    local player = Game.GetPlayer()
-    if not player then
-        return false
-    end
-
-    local transactionSystem = Game.GetTransactionSystem()
-    return transactionSystem ~= nil
-        and transactionSystem:GetItemInSlot(player, TweakDBID.new("AttachmentSlots.WeaponRight")) ~= nil
-end
-
-function Helpers.IsCrouching()
-    local player = Game.GetPlayer()
-    if not player then
-        return false
-    end
-
-    local playerState = player:GetPS()
-    return playerState ~= nil and playerState:IsCrouch() or false
 end
 
 function Helpers.IsYInverted()

@@ -18,6 +18,9 @@ local lastCameraBlockReason = nil
 
 local BODY_WEAPON_CLEAR_GRACE = 0.0
 
+local cachedPlayerState = {}
+local cachedCameraContext = {}
+
 local API = {}
 
 function API.StartNativeCameraCapture()
@@ -36,6 +39,18 @@ local freeLookCameraActions = {
     right_stick_x = true,
     right_stick_y = true,
 }
+
+local function readListenerAction(listener, action)
+    return Game.NameToString(listener:GetName(action)), listener:GetValue(action)
+end
+
+local function consumeSingleAction(consumer)
+    consumer:ConsumeSingleAction()
+end
+
+local function consumeAction(consumer)
+    consumer:Consume()
+end
 
 local function blockingThirdPartyMods()
     return false
@@ -122,12 +137,12 @@ local function logCameraBlockTransition(reason)
     lastCameraBlockReason = reason
 end
 
-local function updateWeaponCameraBlock(hasWeapon, delta)
+local function updateWeaponCameraBlock(hasWeapon, upperBodyState, delta)
     if hasWeapon then
         weaponCameraBlocked = true
         weaponCameraClearElapsed = 0.0
     elseif weaponCameraBlocked then
-        if Helpers.GetUpperBodyState() ~= 0 then
+        if upperBodyState ~= 0 then
             -- Weapon slots disappear during switch, reload, forced-empty-hands,
             -- and traversal animations. Keep the armed block until that state
             -- ends instead of treating the temporary empty slot as a holster.
@@ -145,61 +160,48 @@ local function updateWeaponCameraBlock(hasWeapon, delta)
     return weaponCameraBlocked
 end
 
+local function bindPlayer(player)
+    Helpers.AttachPlayer(player)
+    RuntimeHeight.ResetPlayer()
+end
+
 local function collectPlayerState()
-    local sceneTier = Helpers.GetSceneTier()
-    local hasWeapon = Helpers.HasWeapon()
-    local isTakingDown = Helpers.IsTakingDown() > 0
-    return {
-        sceneTier = sceneTier,
-        hasWeapon = hasWeapon,
-        vitalsState = Helpers.GetVitalsState(),
-        inVehicle = Helpers.GetVehicleState() ~= 0
-            or Helpers.IsInVehicle()
-            or Helpers.HasMountedVehicle(),
-        remoteVehicle = Helpers.HasRemoteControlledVehicle(),
-        deviceCamera = Helpers.IsDeviceCameraActive(),
-        inMinigame = Helpers.IsInMinigame(),
-        inspecting = Helpers.IsInspecting(),
-        forceOpeningDoor = Helpers.IsForceOpeningDoor(),
-        swimming = Helpers.IsSwimming(),
-        takingDown = isTakingDown,
-        carryingBody = Helpers.IsCarryingBody(),
-        felled = Helpers.IsFelled(),
-        onLadder = Helpers.IsOnLadder(),
-        consumableState = Helpers.GetConsumableState(),
-        traversal = Helpers.IsTraversalLocomotion(),
-        inWorkspot = Helpers.IsInWorkspot(),
-        knockedDown = Helpers.IsKnockedDown(),
-    }
+    return Helpers.RefreshPlayerState(cachedPlayerState)
 end
 
 local function buildCameraContext(delta, state)
     state = state or collectPlayerState()
+    if not state then
+        return nil
+    end
     local hasWeapon = state.hasWeapon
     local cameraBlockReason = getCameraBlockReason(state)
     logCameraBlockTransition(cameraBlockReason)
     -- The attachment slot can disappear while the ranged-weapon state machine
     -- still owns the arms/camera. Treat either signal as armed, then keep a short
     -- clear grace for the frame gap at the end of those animations.
-    local reportsArmed = hasWeapon or Helpers.GetWeaponState() ~= 0
-    local blocksCameraForWeapon = updateWeaponCameraBlock(reportsArmed, delta)
+    local reportsArmed = hasWeapon or state.weaponState ~= 0
+    local blocksCameraForWeapon = updateWeaponCameraBlock(
+        reportsArmed,
+        state.upperBodyState,
+        delta
+    )
     local commonEligible = isEnabled and cameraBlockReason == nil
     local immersiveEligible = commonEligible
         and Config.inner.immersiveViewEnabled
-    return {
-        -- Weapon draw/holster retains the ordinary FPP parent, so CameraCore may
-        -- crossfade the additive body correction. Truly incompatible contexts
-        -- still suspend immediately instead of inheriting this transition.
-        bodyContextEligible = immersiveEligible,
-        bodyWeaponBlocked = blocksCameraForWeapon,
-        bodyEligible = immersiveEligible and not blocksCameraForWeapon,
-        -- Ladder locomotion swaps among several native camera profiles while
-        -- moving, including a forced recenter profile. Freezing that parent for
-        -- freelook can strand REDengine's pitch floor at the centre afterward.
-        freeEligible = commonEligible and Config.inner.freeLookEnabled,
-        crouching = Helpers.IsCrouching(),
-        hasWeapon = hasWeapon,
-    }
+    -- Weapon draw/holster retains the ordinary FPP parent, so CameraCore may
+    -- crossfade the additive body correction. Truly incompatible contexts
+    -- still suspend immediately instead of inheriting this transition.
+    cachedCameraContext.bodyContextEligible = immersiveEligible
+    cachedCameraContext.bodyWeaponBlocked = blocksCameraForWeapon
+    cachedCameraContext.bodyEligible = immersiveEligible and not blocksCameraForWeapon
+    -- Ladder locomotion swaps among several native camera profiles while
+    -- moving, including a forced recenter profile. Freezing that parent for
+    -- freelook can strand REDengine's pitch floor at the centre afterward.
+    cachedCameraContext.freeEligible = commonEligible and Config.inner.freeLookEnabled
+    cachedCameraContext.crouching = state.crouching
+    cachedCameraContext.hasWeapon = hasWeapon
+    return cachedCameraContext
 end
 
 local function refreshInputSettings()
@@ -210,15 +212,18 @@ local function setSessionLoaded(loaded, reason)
     isLoaded = loaded
     if loaded then
         isPaused = false
+        bindPlayer(Game.GetPlayer())
         refreshInputSettings()
         RuntimeHeight.MarkDirty()
     else
         isPaused = false
+        local player = Helpers.GetPlayer()
         if initialized then
-            RuntimeHeight.Shutdown(Game.GetPlayer())
+            RuntimeHeight.Shutdown(player)
         end
         lastCameraBlockReason = nil
         CameraCore.Suspend(reason)
+        Helpers.DetachPlayer()
     end
 end
 
@@ -243,7 +248,7 @@ end
 function API.Disable()
     isDisabledByApi = true
     isEnabled = false
-    RuntimeHeight.Shutdown(Game.GetPlayer())
+    RuntimeHeight.Shutdown(Helpers.GetPlayer())
     CameraCore.Suspend("disabled by API")
 end
 
@@ -319,7 +324,20 @@ local function registerPlayerInput(cetVersion)
     end
 
     Observe('PlayerPuppet', 'OnGameAttached', function(player)
+        if player:IsReplacer() then
+            return
+        end
+        bindPlayer(player)
         registerInputListeners(player)
+    end)
+
+    Observe('PlayerPuppet', 'OnDetach', function(player)
+        if player:IsReplacer() then
+            return
+        end
+        Helpers.DetachPlayer()
+        RuntimeHeight.ResetPlayer()
+        CameraCore.Suspend("player detached")
     end)
 
     Observe('PlayerPuppet', 'OnAction', function(first, second, third)
@@ -334,9 +352,7 @@ local function registerPlayerInput(cetVersion)
         end
 
         local listenerAction = GetSingleton('gameinputScriptListenerAction')
-        local ok, actionName, actionValue = pcall(function()
-            return Game.NameToString(listenerAction:GetName(action)), listenerAction:GetValue(action)
-        end)
+        local ok, actionName, actionValue = pcall(readListenerAction, listenerAction, action)
         if not ok or not actionName then
             return
         end
@@ -352,13 +368,9 @@ local function registerPlayerInput(cetVersion)
             and consumer then
             -- Camera X and Y share an input bundle. Consume() on X suppresses
             -- the later Y callback entirely, so only consume this one action.
-            local consumed = pcall(function()
-                consumer:ConsumeSingleAction()
-            end)
+            local consumed = pcall(consumeSingleAction, consumer)
             if not consumed then
-                pcall(function()
-                    consumer:Consume()
-                end)
+                pcall(consumeAction, consumer)
             end
         end
     end)
@@ -371,11 +383,12 @@ function ImmersiveFirstPerson.Init()
     registerForEvent("onShutdown", function()
         isLoaded = false
         isPaused = false
-        RuntimeHeight.Shutdown(Game.GetPlayer())
+        RuntimeHeight.Shutdown(Helpers.GetPlayer())
         if NativeCameraSampler.IsActive() then
             NativeCameraSampler.Cancel()
         end
         CameraCore.Suspend("CET shutdown")
+        Helpers.DetachPlayer()
     end)
 
     registerForEvent("onInit", function()
@@ -422,12 +435,17 @@ function ImmersiveFirstPerson.Init()
     end)
 
     registerForEvent("onUpdate", function(delta)
-        if not initialized or not isLoaded then
+        if not initialized or not isLoaded or not isEnabled or isDisabledByApi then
             return
         end
 
-        local player = Game.GetPlayer()
+        local player = Helpers.GetPlayer()
         local playerState = isPaused and nil or collectPlayerState()
+        if not isPaused and not playerState then
+            RuntimeHeight.ResetPlayer()
+            CameraCore.Suspend("player state unavailable")
+            return
+        end
         local heightSuppressionReason
         if isPaused then
             heightSuppressionReason = RuntimeHeight.GetSuppressionReason()
@@ -453,7 +471,10 @@ function ImmersiveFirstPerson.Init()
             return
         end
 
-        CameraCore.Update(delta, buildCameraContext(delta, playerState))
+        local context = buildCameraContext(delta, playerState)
+        if context then
+            CameraCore.Update(delta, context)
+        end
     end)
 
     registerForEvent("onDraw", function()
@@ -471,7 +492,7 @@ function ImmersiveFirstPerson.Init()
                 isDisabledByApi = false
                 RuntimeHeight.MarkDirty()
             else
-                RuntimeHeight.Shutdown(Game.GetPlayer())
+                RuntimeHeight.Shutdown(Helpers.GetPlayer())
                 CameraCore.Suspend("disabled in overlay")
             end
         end
@@ -639,7 +660,7 @@ function ImmersiveFirstPerson.Init()
             isDisabledByApi = false
             RuntimeHeight.MarkDirty()
         else
-            RuntimeHeight.Shutdown(Game.GetPlayer())
+            RuntimeHeight.Shutdown(Helpers.GetPlayer())
             CameraCore.Suspend("disabled by hotkey")
         end
     end)
@@ -651,7 +672,7 @@ function ImmersiveFirstPerson.Init()
 
         if keydown then
             local context = buildCameraContext(nil, collectPlayerState())
-            if context.freeEligible then
+            if context and context.freeEligible then
                 CameraCore.BeginFreeLook(context)
             end
         else
