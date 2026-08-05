@@ -8,21 +8,22 @@ base\gameplay\anim_graphs\player_base.animgraph
 
 The vanilla file is in `archive\pc\content\basegame_1_engine.archive`.
 
-The solution we ended up using changes the pose immediately before the graph copies `Torso_Hips_Driver_GRP` to `Hips`. The full 30 cm pose adds five `TranslateBone` nodes:
+The solution changes the pose immediately before the graph copies `Torso_Hips_Driver_GRP` to `Hips`. Each signed 50 cm endpoint adds five `TranslateBone` nodes:
 
 ```text
-LeftLeg                    X +0.15 m
-LeftFoot                   X +0.15 m
-RightLeg                   X -0.15 m
-RightFoot                  X -0.15 m
-Torso_COG_Control_JNT      Z +0.30 m
+                            -50 cm      +50 cm
+LeftLeg                    X -0.25 m    X +0.25 m
+LeftFoot                   X -0.25 m    X +0.25 m
+RightLeg                   X +0.25 m    X -0.25 m
+RightFoot                  X +0.25 m    X -0.25 m
+Torso_COG_Control_JNT      Z -0.50 m    Z +0.50 m
 ```
 
-The leg axes are mirrored, hence the opposite signs. The thigh and shin changes add 30 cm to each leg. The COG change raises the hips and everything above them by the same amount. So the body and camera move, but the feet stay on the ground.
+The leg axes are mirrored, hence the opposite signs. Each thigh and shin changes by half the endpoint amount. The COG moves the hips and everything above them by the full amount. So the body and camera move, but the feet stay on the ground.
 
-The graph blends between the vanilla pose and the 30 cm pose. CET writes a value from `0.0` to `1.0` to `ifp_height_blend`, which is what lets us change height while the game is running.
+The graph blends between the -50 cm and +50 cm poses. CET writes a value from `0.0` to `1.0` to `ifp_height_blend`; `0.5` is the vanilla pose and is used whenever height is disabled or suppressed.
 
-The graph also has `ifp_height_contract_v1_30cm`. The native plugin checks for it. If another mod replaces `player_base.animgraph`, the check fails and the height slider becomes unavailable instead of silently doing nothing.
+The graph also has `ifp_height_contract_v2_signed_50cm`. The native plugin checks for it. If another mod replaces `player_base.animgraph`, the check fails and the height slider becomes unavailable instead of silently doing nothing.
 
 ## Rebuilding the archive
 
@@ -48,8 +49,8 @@ Known 2.31 files:
 Vanilla graph       373,435 bytes
 SHA-256             DFF7C3BDEF154B9F9CCF87BDCA0FAF3EAC4565E4428714FB52D46F4C4F7D0EB3
 
-Modified graph      375,517 bytes
-SHA-256             CB4DE8B3CAA3AC8422926FEC5D00AD60CA9CA541DAC8A92BB409862FDC92CA02
+Modified graph      376,586 bytes
+SHA-256             05A0FF0C0B7D04B18BC20BF3BA69A532BB284BC00FEAC2689D3B2AABBBA795B7
 ```
 
 The hash of the outer archive changes between WolvenKit builds for some reason. The graph inside it is stable, so that is what the builder checks.

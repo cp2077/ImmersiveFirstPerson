@@ -18,7 +18,7 @@ $wolvenKitFull = [IO.Path]::GetFullPath($WolvenKit)
 $sourceArchive = Join-Path $gameRootFull 'archive\pc\content\basegame_1_engine.archive'
 $resourcePath = 'base\gameplay\anim_graphs\player_base.animgraph'
 $vanillaHash = 'DFF7C3BDEF154B9F9CCF87BDCA0FAF3EAC4565E4428714FB52D46F4C4F7D0EB3'
-$builtGraphHash = 'CB4DE8B3CAA3AC8422926FEC5D00AD60CA9CA541DAC8A92BB409862FDC92CA02'
+$builtGraphHash = '05A0FF0C0B7D04B18BC20BF3BA69A532BB284BC00FEAC2689D3B2AABBBA795B7'
 
 foreach ($required in @($sourceArchive, $wolvenKitFull)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
@@ -59,26 +59,38 @@ try {
     }
     $vanillaJson = Join-Path $jsonRoot 'player_base.animgraph.json'
 
-    Write-Host 'Adding the 30 cm grounded height pose'
+    Write-Host 'Adding the -50 cm grounded height pose'
     & (Join-Path $PSScriptRoot 'height\add-grounded-height.ps1') `
-        -DeltaMeters 0.30 `
+        -DeltaMeters -0.50 `
         -AnimGraphJson $vanillaJson `
         -WolvenKit $wolvenKitFull `
         -WorkRoot $workRoot `
         -Placement GroundedFullHeight `
-        -VariantTag '30cm'
+        -VariantTag 'minus-50cm'
 
-    $heightJson = Join-Path $workRoot 'animgraph-grounded-full-height-30cm\json\player_base.animgraph.json'
+    $minimumHeightJson = Join-Path $workRoot 'animgraph-grounded-full-height-minus-50cm\json\player_base.animgraph.json'
+    Write-Host 'Adding the +50 cm grounded height pose'
+    & (Join-Path $PSScriptRoot 'height\add-grounded-height.ps1') `
+        -DeltaMeters 0.50 `
+        -AnimGraphJson $vanillaJson `
+        -WolvenKit $wolvenKitFull `
+        -WorkRoot $workRoot `
+        -Placement GroundedFullHeight `
+        -VariantTag 'plus-50cm'
+
+    $maximumHeightJson = Join-Path $workRoot 'animgraph-grounded-full-height-plus-50cm\json\player_base.animgraph.json'
     Write-Host 'Adding the runtime blend input'
     & (Join-Path $PSScriptRoot 'height\add-runtime-blend.ps1') `
         -BaseAnimGraphJson $vanillaJson `
-        -HeightAnimGraphJson $heightJson `
-        -VariantTag '30cm' `
-        -MaximumHeightMeters 0.30 `
+        -MinimumHeightAnimGraphJson $minimumHeightJson `
+        -MaximumHeightAnimGraphJson $maximumHeightJson `
+        -VariantTag 'signed-50cm' `
+        -MinimumHeightMeters -0.50 `
+        -MaximumHeightMeters 0.50 `
         -WolvenKit $wolvenKitFull `
         -WorkRoot $workRoot
 
-    $builtArchive = Join-Path $workRoot 'animgraph-runtime-height-blend-proof-30cm\ImmersiveFirstPersonHeight-animgraph-runtime-height-blend-proof-30cm.archive.disabled'
+    $builtArchive = Join-Path $workRoot 'animgraph-runtime-height-blend-proof-signed-50cm\ImmersiveFirstPersonHeight-animgraph-runtime-height-blend-proof-signed-50cm.archive.disabled'
     if (-not (Test-Path -LiteralPath $builtArchive -PathType Leaf)) {
         throw "The height archive was not built: $builtArchive"
     }
@@ -93,7 +105,7 @@ try {
     $verifiedGraph = Join-Path $verifyExtractRoot $resourcePath
     $actualBuiltHash = (Get-FileHash -LiteralPath $verifiedGraph -Algorithm SHA256).Hash
     if ($actualBuiltHash -ne $builtGraphHash) {
-        throw "The built animgraph is not the known 30 cm graph. Expected $builtGraphHash, got $actualBuiltHash."
+        throw "The built animgraph is not the known signed 50 cm graph. Expected $builtGraphHash, got $actualBuiltHash."
     }
 
     $outputDirectory = Split-Path -Parent $outputFull

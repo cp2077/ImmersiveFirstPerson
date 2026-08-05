@@ -80,9 +80,13 @@ if ($syntaxFailures.Count -gt 0) {
 Write-Host 'LuaJIT syntax check passed.'
 
 if ($modRoot -eq $workspace) {
-    Write-Host 'Runtime height tests'
+    Write-Host 'Configuration and runtime height tests'
     Push-Location $workspace
     try {
+        & $luaJit (Join-Path $workspace 'tests\config-height-migration.lua')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Config height migration tests failed with exit code $LASTEXITCODE."
+        }
         & $luaJit (Join-Path $workspace 'tests\runtime-height.lua')
         if ($LASTEXITCODE -ne 0) {
             throw "Runtime height tests failed with exit code $LASTEXITCODE."

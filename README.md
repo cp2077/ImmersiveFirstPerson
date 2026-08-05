@@ -8,9 +8,9 @@
 
 Body correction runs while looking down during ordinary gameplay and yields to vehicles, workspots, traversal, takedowns, knockdowns, body carrying, and camera-controlled scenes. FreeLook remains available while a weapon is equipped, and the mod leaves the game's FOV unchanged.
 
-The bundled height override replaces `player_base.animgraph` with a versioned two-branch blend. One branch is vanilla; the other raises V's COG and lengthens both thigh and shin segments while the Root-space foot targets remain grounded. CET drives the blend over 100 ms, so the setting can change at runtime without moving `gameFPPCameraComponent`, changing camera pitch, or restarting the game.
+The bundled height override replaces `player_base.animgraph` with a versioned two-branch blend. Its endpoints shorten or lengthen V's legs by 50 cm while moving the COG by the same amount and keeping the Root-space foot targets grounded. The midpoint is the exact vanilla pose. CET drives the blend over 100 ms, so the setting can change at runtime without moving `gameFPPCameraComponent`, changing camera pitch, or restarting the game.
 
-Height remains active during ordinary roaming, combat, ADS, scanner use, dialogue, and swimming. It smoothly returns to vanilla for any vehicle occupancy, workspots, scripted scenes, ladders/climbing/vaulting, takedowns/grapples, body carrying, knockdowns, and other forced-contact states. Values above +12 cm are deliberately marked experimental because knees and authored contacts can become visibly distorted.
+Height remains active during ordinary roaming, combat, ADS, scanner use, dialogue, and swimming. It smoothly returns to vanilla for any vehicle occupancy, workspots, scripted scenes, ladders/climbing/vaulting, takedowns/grapples, body carrying, knockdowns, and other forced-contact states. Negative values and values above +14 cm are deliberately marked experimental; values above +30 cm are extremely unstable.
 
 The mod verifies the exact loaded animgraph contract. If the bundled archive is absent, incompatible, or overridden by another mod, the height slider is unavailable and the rest of Immersive First Person continues normally.
 
@@ -30,7 +30,7 @@ Bindings live in two CET Overlay sections:
 1. **Hotkeys** -> Toggle Enabled
 2. **Inputs** -> FreeLook
 
-The CET Overlay exposes independent **Immersive view**, **FreeLook**, and **Height adjustment** switches, FreeLook settings, a `+0 cm` to `+30 cm` height slider when the compatible height graph is loaded, and a **Debug** section. Generic NPC gaze correction follows the immersive-view switch. Start around +5 to +8 cm.
+The CET Overlay exposes independent **Immersive view**, **FreeLook**, and **Height adjustment** switches, FreeLook settings, a `-50 cm` to `+50 cm` height slider when the compatible height graph is loaded, and a **Debug** section. Generic NPC gaze correction follows the immersive-view switch. Start around +5 to +8 cm.
 
 ----
 

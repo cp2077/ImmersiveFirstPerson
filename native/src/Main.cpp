@@ -13,7 +13,7 @@
 namespace
 {
 constexpr RED4ext::CName kHeightInput("ifp_height_blend");
-constexpr RED4ext::CName kHeightContract("ifp_height_contract_v1_30cm");
+constexpr RED4ext::CName kHeightContract("ifp_height_contract_v2_signed_50cm");
 
 enum class HeightGraphStatus : int32_t
 {

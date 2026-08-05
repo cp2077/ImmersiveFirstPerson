@@ -3,11 +3,15 @@ param(
     [Parameter(Mandatory)]
     [string] $BaseAnimGraphJson,
     [Parameter(Mandatory)]
-    [string] $HeightAnimGraphJson,
+    [string] $MinimumHeightAnimGraphJson,
+    [Parameter(Mandatory)]
+    [string] $MaximumHeightAnimGraphJson,
     [ValidatePattern('^[a-z0-9-]+$')]
-    [string] $VariantTag = '30cm',
+    [string] $VariantTag = 'signed-50cm',
+    [ValidateRange(-0.50, -0.01)]
+    [double] $MinimumHeightMeters = -0.50,
     [ValidateRange(0.01, 0.50)]
-    [double] $MaximumHeightMeters = 0.30,
+    [double] $MaximumHeightMeters = 0.50,
     [Parameter(Mandatory)]
     [string] $WolvenKit,
     [Parameter(Mandatory)]
@@ -18,8 +22,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $variableName = 'ifp_height_blend'
-$contractVariableName = 'ifp_height_contract_v1_30cm'
-$debugName = 'ImmersiveFirstPerson_Runtime_Height_v1_30cm'
+$contractVariableName = 'ifp_height_contract_v2_signed_50cm'
+$debugName = 'ImmersiveFirstPerson_Runtime_Height_v2_signed_50cm'
 $experimentsRoot = [IO.Path]::GetFullPath($WorkRoot)
 $experimentRoot = Join-Path $experimentsRoot "animgraph-runtime-height-blend-proof-$VariantTag"
 $jsonRoot = Join-Path $experimentRoot 'json'
@@ -108,51 +112,98 @@ function Get-HipsConstraintInputPose {
     }
 }
 
-foreach ($path in @($BaseAnimGraphJson, $HeightAnimGraphJson, $WolvenKit)) {
+foreach ($path in @($BaseAnimGraphJson, $MinimumHeightAnimGraphJson, $MaximumHeightAnimGraphJson, $WolvenKit)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required file not found: $path"
     }
 }
 
 $baseSource = [IO.File]::ReadAllText([IO.Path]::GetFullPath($BaseAnimGraphJson))
-$heightSource = [IO.File]::ReadAllText([IO.Path]::GetFullPath($HeightAnimGraphJson))
-if ($heightSource.Contains($debugName) -or $heightSource.Contains(('"$value": "' + $variableName + '"'))) {
-    throw 'Height graph is already wrapped by the runtime proof'
+$minimumSource = [IO.File]::ReadAllText([IO.Path]::GetFullPath($MinimumHeightAnimGraphJson))
+$maximumSource = [IO.File]::ReadAllText([IO.Path]::GetFullPath($MaximumHeightAnimGraphJson))
+if ($minimumSource.Contains($debugName) -or $maximumSource.Contains($debugName) -or
+    $minimumSource.Contains(('"$value": "' + $variableName + '"')) -or
+    $maximumSource.Contains(('"$value": "' + $variableName + '"'))) {
+    throw 'Height graph is already wrapped by the runtime blend'
 }
 
 $basePose = Get-HipsConstraintInputPose -Text $baseSource
-$heightPose = Get-HipsConstraintInputPose -Text $heightSource
-if (-not $heightPose.Object.Contains('ImmersiveFirstPerson_Left_Thigh_Extension') -or
-    -not $heightPose.Object.Contains('ImmersiveFirstPerson_Left_Shin_Extension') -or
-    -not $heightPose.Object.Contains('ImmersiveFirstPerson_Right_Thigh_Extension') -or
-    -not $heightPose.Object.Contains('ImmersiveFirstPerson_Right_Shin_Extension') -or
-    -not $heightPose.Object.Contains('ImmersiveFirstPerson_Grounded_Full_Height')) {
-    throw 'Expected the grounded full-height transform chain at the Hips constraint input'
-}
+$minimumPose = Get-HipsConstraintInputPose -Text $minimumSource
+$maximumPose = Get-HipsConstraintInputPose -Text $maximumSource
 
 $originalHandleMatch = [regex]::Match($basePose.Object, '^\s*\{\s*"HandleId"\s*:\s*"(?<id>[0-9]+)"')
 if (-not $originalHandleMatch.Success) {
     throw 'Could not read the original Hips input pose handle'
 }
 $originalHandle = $originalHandleMatch.Groups['id'].Value
-if (-not $heightPose.Object.Contains(('"HandleId": "' + $originalHandle + '"'))) {
-    throw "The height branch no longer contains original pose handle $originalHandle"
-}
-$originalPoseOffset = $heightPose.Object.IndexOf($basePose.Object, [StringComparison]::Ordinal)
-if ($originalPoseOffset -lt 0) {
-    throw 'Could not isolate the original pose inside the fixed height branch'
-}
-$originalPoseReference = '{ "HandleRefId": "' + $originalHandle + '" }'
-$heightBranch = $heightPose.Object.Substring(0, $originalPoseOffset) +
-    $originalPoseReference +
-    $heightPose.Object.Substring($originalPoseOffset + $basePose.Object.Length)
+function Get-EndpointBranch {
+    param(
+        [Parameter(Mandatory)] [string] $EndpointName,
+        [Parameter(Mandatory)] [string] $EndpointPose,
+        [Parameter(Mandatory)] [string] $OriginalPose,
+        [Parameter(Mandatory)] [string] $OriginalPoseHandle
+    )
 
-$handleMatches = [regex]::Matches($heightSource, '"HandleId"\s*:\s*"(?<id>[0-9]+)"')
+    foreach ($marker in @(
+        'ImmersiveFirstPerson_Left_Thigh_Extension',
+        'ImmersiveFirstPerson_Left_Shin_Extension',
+        'ImmersiveFirstPerson_Right_Thigh_Extension',
+        'ImmersiveFirstPerson_Right_Shin_Extension',
+        'ImmersiveFirstPerson_Grounded_Full_Height'
+    )) {
+        if (-not $EndpointPose.Contains($marker)) {
+            throw "$EndpointName branch is missing $marker"
+        }
+    }
+
+    $originalPoseOffset = $EndpointPose.IndexOf($OriginalPose, [StringComparison]::Ordinal)
+    if ($originalPoseOffset -lt 0) {
+        throw "Could not isolate the original pose inside the $EndpointName branch"
+    }
+    $originalPoseReference = '{ "HandleRefId": "' + $OriginalPoseHandle + '" }'
+    return $EndpointPose.Substring(0, $originalPoseOffset) +
+        $originalPoseReference +
+        $EndpointPose.Substring($originalPoseOffset + $OriginalPose.Length)
+}
+
+$minimumBranch = Get-EndpointBranch `
+    -EndpointName 'minimum-height' `
+    -EndpointPose $minimumPose.Object `
+    -OriginalPose $basePose.Object `
+    -OriginalPoseHandle $originalHandle
+$maximumBranch = Get-EndpointBranch `
+    -EndpointName 'maximum-height' `
+    -EndpointPose $maximumPose.Object `
+    -OriginalPose $basePose.Object `
+    -OriginalPoseHandle $originalHandle
+
+# Both independently generated endpoints allocate the same wrapper handles.
+# The maximum graph is the output base, so move the minimum branch above it.
+$handleMatches = [regex]::Matches($maximumSource, '"HandleId"\s*:\s*"(?<id>[0-9]+)"')
 $maxHandle = ($handleMatches | ForEach-Object { [uint64] $_.Groups['id'].Value } | Measure-Object -Maximum).Maximum
-$blendHandle = $maxHandle + 1
-$floatNodeHandle = $maxHandle + 2
-$variableHandle = $maxHandle + 3
-$contractVariableHandle = $maxHandle + 4
+$nextHandle = [uint64] $maxHandle + 1
+$minimumHandles = @(
+    [regex]::Matches($minimumBranch, '"HandleId"\s*:\s*"(?<id>[0-9]+)"') |
+        ForEach-Object { [uint64] $_.Groups['id'].Value } |
+        Select-Object -Unique
+)
+foreach ($handle in $minimumHandles) {
+    $replacement = [string] $nextHandle
+    $minimumBranch = $minimumBranch.
+        Replace(('"HandleId": "' + $handle + '"'), ('"HandleId": "' + $replacement + '"')).
+        Replace(('"HandleRefId": "' + $handle + '"'), ('"HandleRefId": "' + $replacement + '"'))
+    $nextHandle++
+}
+
+# Define the shared vanilla pose in the first branch so WolvenKit resolves it
+# before the maximum branch's handle reference.
+$originalPoseReference = '{ "HandleRefId": "' + $originalHandle + '" }'
+$minimumBranch = $minimumBranch.Replace($originalPoseReference, $basePose.Object)
+
+$blendHandle = $nextHandle
+$floatNodeHandle = $nextHandle + 1
+$variableHandle = $nextHandle + 2
+$contractVariableHandle = $nextHandle + 3
 
 $blendTemplate = @'
 {
@@ -166,7 +217,7 @@ $blendTemplate = @'
     },
     "firstInputNode": {
       "$type": "animPoseLink",
-      "node": __ORIGINAL_POSE__
+      "node": __MINIMUM_POSE__
     },
     "id": 4294967295,
     "maxInputValue": 1,
@@ -174,7 +225,7 @@ $blendTemplate = @'
     "poseInfoLogger": null,
     "secondInputNode": {
       "$type": "animPoseLink",
-      "node": __HEIGHT_POSE__
+      "node": __MAXIMUM_POSE__
     },
     "syncMethod": null,
     "timeWarpingEnabled": 0,
@@ -255,12 +306,12 @@ $blendTemplate = @'
 
 $blend = $blendTemplate.Replace('__BLEND_HANDLE__', [string] $blendHandle).
     Replace('__FLOAT_NODE_HANDLE__', [string] $floatNodeHandle).
-    Replace('__ORIGINAL_POSE__', $basePose.Object).
+    Replace('__MINIMUM_POSE__', $minimumBranch).
     Replace('__DEBUG_NAME__', $debugName).
     Replace('__VARIABLE_NAME__', $variableName).
-    Replace('__HEIGHT_POSE__', $heightBranch)
+    Replace('__MAXIMUM_POSE__', $maximumBranch)
 
-$patched = $heightSource.Substring(0, $heightPose.Start) + $blend + $heightSource.Substring($heightPose.End + 1)
+$patched = $maximumSource.Substring(0, $maximumPose.Start) + $blend + $maximumSource.Substring($maximumPose.End + 1)
 
 $variablesOffset = $patched.IndexOf('"variables": {', [StringComparison]::Ordinal)
 $floatVariablesOffset = $patched.IndexOf('"floatVariables": [', $variablesOffset, [StringComparison]::Ordinal)
@@ -274,7 +325,7 @@ $variableDefinition = @'
               "HandleId": "__VARIABLE_HANDLE__",
               "Data": {
                 "$type": "animAnimVariableFloat",
-                "default": 0,
+                "default": 0.5,
                 "enableDebug": 0,
                 "max": 1,
                 "min": 0,
@@ -283,7 +334,7 @@ $variableDefinition = @'
                   "$storage": "string",
                   "$value": "__VARIABLE_NAME__"
                 },
-                "value": 0
+                "value": 0.5
               }
             },
 '@
@@ -335,10 +386,11 @@ Move-Item -LiteralPath $packed -Destination $disabled
 
 [pscustomobject]@{
     Archive = $disabled
+    MinimumHeight = ('{0:R}m' -f $MinimumHeightMeters)
     MaximumHeight = ('{0:R}m' -f $MaximumHeightMeters)
     RuntimeVariable = $variableName
     ContractVariable = $contractVariableName
-    DefaultBlend = 0.0
+    DefaultBlend = 0.5
     BlendHandle = $blendHandle
     FloatNodeHandle = $floatNodeHandle
     VariableHandle = $variableHandle

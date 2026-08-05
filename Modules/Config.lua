@@ -169,8 +169,8 @@ local function validate(config)
     result.heightAdjustmentEnabled = result.heightAdjustmentEnabled == true
     result.heightAdjustmentAmount = math.floor(clamp(
         tonumber(result.heightAdjustmentAmount) or defaults.heightAdjustmentAmount,
-        0,
-        30
+        -50,
+        50
     ) + 0.5)
     result.version = Vars.CONFIG_VERSION
     return result

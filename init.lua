@@ -555,27 +555,40 @@ function ImmersiveFirstPerson.Init()
             ImGui.TextDisabled("Checking height compatibility...")
         elseif RuntimeHeight.IsAvailable() then
             Config.inner.heightAdjustmentAmount, changed = ImGui.SliderInt(
-                "Increase",
+                "Adjustment",
                 math.floor(Config.inner.heightAdjustmentAmount),
-                0,
+                RuntimeHeight.GetMinimumHeightCentimeters(),
                 RuntimeHeight.GetMaximumHeightCentimeters(),
-                "+%d cm"
+                "%+d cm"
             )
             if changed then
                 Config.SaveConfig()
                 RuntimeHeight.MarkDirty()
             end
 
-            if Config.inner.heightAdjustmentAmount > 13 then
+            local heightAmount = Config.inner.heightAdjustmentAmount
+            if heightAmount < 0 then
                 ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.25, 0.25, 1.0)
                 ImGui.TextWrapped(
-                    "Above +12 cm is experimental: knees, authored contacts, and transitions may look wrong."
+                    "Negative values are experimental: legs, knees, authored contacts, and transitions may look wrong."
+                )
+                ImGui.PopStyleColor(1)
+            elseif heightAmount > 30 then
+                ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.25, 0.25, 1.0)
+                ImGui.TextWrapped(
+                    "Above +30 cm is extremely unstable: expect severe animation and contact distortion."
+                )
+                ImGui.PopStyleColor(1)
+            elseif heightAmount > 14 then
+                ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.25, 0.25, 1.0)
+                ImGui.TextWrapped(
+                    "Above +14 cm is experimental: knees, authored contacts, and transitions may look wrong."
                 )
                 ImGui.PopStyleColor(1)
             end
             local suppressionReason = RuntimeHeight.GetSuppressionReason()
             if Config.inner.heightAdjustmentEnabled
-                and Config.inner.heightAdjustmentAmount > 0
+                and heightAmount ~= 0
                 and suppressionReason then
                 ImGui.TextWrapped("Temporarily disabled: " .. suppressionReason)
             end

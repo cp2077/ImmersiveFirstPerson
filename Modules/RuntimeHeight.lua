@@ -3,7 +3,10 @@ local Helpers = require("Modules/Helpers")
 local RuntimeHeight = {}
 
 local BASE_PLAYER_HEIGHT_CM = 171
-local MAXIMUM_HEIGHT_CM = 30
+local MINIMUM_HEIGHT_CM = -50
+local MAXIMUM_HEIGHT_CM = 50
+local HEIGHT_RANGE_CM = MAXIMUM_HEIGHT_CM - MINIMUM_HEIGHT_CM
+local NEUTRAL_BLEND = (0 - MINIMUM_HEIGHT_CM) / HEIGHT_RANGE_CM
 local TRANSITION_DURATION = 0.10
 local CONTRACT_POLL_INTERVAL = 0.50
 local INPUT_NAME = "ifp_height_blend"
@@ -25,9 +28,9 @@ local state = {
     pollElapsed = CONTRACT_POLL_INTERVAL,
     dirty = true,
     lookAtApplied = nil,
-    currentBlend = 0.0,
-    startBlend = 0.0,
-    targetBlend = 0.0,
+    currentBlend = NEUTRAL_BLEND,
+    startBlend = NEUTRAL_BLEND,
+    targetBlend = NEUTRAL_BLEND,
     transitionElapsed = TRANSITION_DURATION,
     lastSentBlend = nil,
     lastLoggedStatus = nil,
@@ -166,7 +169,7 @@ local function updateTransition(delta, player)
 
     -- Animation-controller inputs are frame-fed values, not durable settings.
     -- Keep publishing even after the transition settles or the graph falls back
-    -- toward its declared zero default between the slower contract polls.
+    -- toward its declared neutral default between the slower contract polls.
     sendBlend(player, state.currentBlend, true)
 end
 
@@ -185,7 +188,7 @@ function RuntimeHeight.Update(
 )
     local elapsed = math.max(tonumber(delta) or 0.0, 0.0)
     if suppressionReason ~= state.suppressionReason
-        and (tonumber(amountCentimeters) or 0.0) > 0.0 then
+        and (tonumber(amountCentimeters) or 0.0) ~= 0.0 then
         if suppressionReason then
             Helpers.Log("runtime height suppressed: " .. suppressionReason)
         elseif state.suppressionReason then
@@ -199,9 +202,9 @@ function RuntimeHeight.Update(
     if playerKey ~= state.playerKey then
         state.playerKey = playerKey
         state.graphStatus = GRAPH_STATUS.WAITING
-        state.currentBlend = 0.0
-        state.startBlend = 0.0
-        state.targetBlend = 0.0
+        state.currentBlend = NEUTRAL_BLEND
+        state.startBlend = NEUTRAL_BLEND
+        state.targetBlend = NEUTRAL_BLEND
         state.transitionElapsed = TRANSITION_DURATION
         state.lastSentBlend = nil
         state.lookAtApplied = nil
@@ -226,15 +229,15 @@ function RuntimeHeight.Update(
         inspectGraph(player)
         local isCompatible = state.graphStatus == GRAPH_STATUS.COMPATIBLE
         if isCompatible and not wasCompatible then
-            state.currentBlend = 0.0
-            state.startBlend = 0.0
-            state.targetBlend = 0.0
+            state.currentBlend = NEUTRAL_BLEND
+            state.startBlend = NEUTRAL_BLEND
+            state.targetBlend = NEUTRAL_BLEND
             state.transitionElapsed = TRANSITION_DURATION
             state.lastSentBlend = nil
         elseif not isCompatible then
-            state.currentBlend = 0.0
-            state.startBlend = 0.0
-            state.targetBlend = 0.0
+            state.currentBlend = NEUTRAL_BLEND
+            state.startBlend = NEUTRAL_BLEND
+            state.targetBlend = NEUTRAL_BLEND
             state.transitionElapsed = TRANSITION_DURATION
             state.lastSentBlend = nil
         end
@@ -247,14 +250,13 @@ function RuntimeHeight.Update(
 
     local amount = clamp(
         math.floor((tonumber(amountCentimeters) or 0.0) + 0.5),
-        0,
+        MINIMUM_HEIGHT_CM,
         MAXIMUM_HEIGHT_CM
     )
     local targetBlend = heightEnabled == true
-        and amount > 0
         and suppressionReason == nil
-        and amount / MAXIMUM_HEIGHT_CM
-        or 0.0
+        and (amount - MINIMUM_HEIGHT_CM) / HEIGHT_RANGE_CM
+        or NEUTRAL_BLEND
     beginTransition(targetBlend)
     updateTransition(elapsed, player)
 
@@ -262,7 +264,7 @@ end
 
 function RuntimeHeight.Shutdown(player)
     if player and state.graphStatus == GRAPH_STATUS.COMPATIBLE then
-        sendBlend(player, 0.0, true)
+        sendBlend(player, NEUTRAL_BLEND, true)
     end
     if player then
         pcall(function()
@@ -271,8 +273,8 @@ function RuntimeHeight.Shutdown(player)
     end
     state.player = nil
     state.playerKey = nil
-    state.currentBlend = 0.0
-    state.targetBlend = 0.0
+    state.currentBlend = NEUTRAL_BLEND
+    state.targetBlend = NEUTRAL_BLEND
     state.lastSentBlend = nil
     state.lookAtApplied = nil
     state.suppressionReason = nil
@@ -298,7 +300,7 @@ function RuntimeHeight.GetSuppressionReason()
 end
 
 function RuntimeHeight.GetEffectiveHeightCentimeters()
-    return state.currentBlend * MAXIMUM_HEIGHT_CM
+    return MINIMUM_HEIGHT_CM + state.currentBlend * HEIGHT_RANGE_CM
 end
 
 function RuntimeHeight.GetEstimatedHeightCentimeters()
@@ -307,6 +309,10 @@ end
 
 function RuntimeHeight.GetMaximumHeightCentimeters()
     return MAXIMUM_HEIGHT_CM
+end
+
+function RuntimeHeight.GetMinimumHeightCentimeters()
+    return MINIMUM_HEIGHT_CM
 end
 
 return RuntimeHeight
