@@ -165,6 +165,16 @@ local function bindPlayer(player)
     RuntimeHeight.ResetPlayer()
 end
 
+local function ensurePlayerBound()
+    local player = Helpers.GetPlayer()
+    if player then
+        return player
+    end
+
+    bindPlayer(Game.GetPlayer())
+    return Helpers.GetPlayer()
+end
+
 local function collectPlayerState()
     return Helpers.RefreshPlayerState(cachedPlayerState)
 end
@@ -341,7 +351,7 @@ local function registerPlayerInput(cetVersion)
     end)
 
     Observe('PlayerPuppet', 'OnAction', function(first, second, third)
-        if not isLoaded then
+        if not isLoaded or not CameraCore.IsFreeLooking() then
             return
         end
 
@@ -357,14 +367,13 @@ local function registerPlayerInput(cetVersion)
             return
         end
 
-        if CameraCore.IsFreeLooking() and actionName == "mouse_left" and actionValue > 0 then
+        if actionName == "mouse_left" and actionValue > 0 then
             CameraCore.AbortFreeLook()
             return
         end
 
         CameraCore.OnAction(actionName, actionValue)
-        if CameraCore.IsFreeLooking()
-            and freeLookCameraActions[actionName]
+        if freeLookCameraActions[actionName]
             and consumer then
             -- Camera X and Y share an input bundle. Consume() on X suppresses
             -- the later Y callback entirely, so only consume this one action.
@@ -439,7 +448,7 @@ function ImmersiveFirstPerson.Init()
             return
         end
 
-        local player = Helpers.GetPlayer()
+        local player = ensurePlayerBound()
         local playerState = isPaused and nil or collectPlayerState()
         if not isPaused and not playerState then
             RuntimeHeight.ResetPlayer()

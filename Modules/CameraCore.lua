@@ -27,6 +27,7 @@ local BODY_HOLSTER_PROBE_POSITION_TOLERANCE = 0.0005
 local BODY_HOLSTER_PROBE_ORIENTATION_DOT = 0.9999998
 local BODY_HOLSTER_PROBE_LOG_DELAY = 0.50
 local FIXED_FOV_POSITION_COMPENSATION = 0.70
+local BODY_ACTIVATION_HYSTERESIS_DEGREES = 0.25
 
 local runtime = {
     mode = MODE.SUSPENDED,
@@ -36,6 +37,7 @@ local runtime = {
     nativePitch = 0,
     bodyProgress = 0,
     bodyPitch = 0,
+    bodyCorrectionActive = false,
     bodyBlend = nil,
     bodyContextEligible = nil,
     bodyWeaponBlocked = nil,
@@ -523,13 +525,13 @@ end
 local function maintainInputUnlock()
 end
 
-local function captureBaseline(fpp)
+local function captureBaseline(fpp, sampledPosition, sampledOrientation)
     if runtime.ownsCamera then
         return true
     end
 
-    local position = fpp:GetLocalPosition()
-    local orientation = fpp:GetLocalOrientation()
+    local position = sampledPosition or fpp:GetLocalPosition()
+    local orientation = sampledOrientation or fpp:GetLocalOrientation()
     if not position or not orientation then
         return false
     end
@@ -547,6 +549,7 @@ local function captureBaseline(fpp)
 end
 
 local function releaseCamera(fpp)
+    runtime.bodyCorrectionActive = false
     if not runtime.ownsCamera or not runtime.baseline then
         runtime.ownsCamera = false
         runtime.baseline = nil
@@ -1263,22 +1266,32 @@ local function detectCompetingWriter(actualPosition, actualOrientation)
     end
 end
 
-local function composeAndWrite(fpp, context)
-    if not captureBaseline(fpp) or not runtime.baseline then
+local function composeAndWrite(
+    fpp,
+    context,
+    sampledPosition,
+    sampledOrientation,
+    sampledNativeOrientation,
+    sampledNativePitch
+)
+    if not captureBaseline(fpp, sampledPosition, sampledOrientation)
+        or not runtime.baseline then
         return false
     end
 
-    local actualPosition = fpp:GetLocalPosition()
-    local actualOrientation = fpp:GetLocalOrientation()
+    local actualPosition = sampledPosition or fpp:GetLocalPosition()
+    local actualOrientation = sampledOrientation or fpp:GetLocalOrientation()
     if not actualPosition or not actualOrientation then
         return false
     end
     detectCompetingWriter(actualPosition, actualOrientation)
 
-    local nativeOrientation = getNativeOrientation(fpp, actualOrientation)
-    local nativePitch = nativeOrientation
-        and nativePitchFromOrientation(nativeOrientation)
-        or nil
+    local nativeOrientation = sampledNativeOrientation
+        or getNativeOrientation(fpp, actualOrientation)
+    local nativePitch = sampledNativePitch
+    if nativePitch == nil and nativeOrientation then
+        nativePitch = nativePitchFromOrientation(nativeOrientation)
+    end
     if not nativePitch then
         return false
     end
@@ -1722,6 +1735,7 @@ function CameraCore.Update(delta, context)
         runtime.pitchCeiling = nil
         runtime.entryNativePitch = 0.0
         runtime.entryNativeOrientation = nil
+        runtime.bodyCorrectionActive = false
         runtime.ownsCamera = false
         runtime.baseline = nil
         runtime.lastApplied = nil
@@ -1788,24 +1802,46 @@ function CameraCore.Update(delta, context)
     end
 
     local actualOrientation = fpp:GetLocalOrientation()
-    local nativePitch = actualOrientation and getNativePitch(fpp, actualOrientation) or nil
+    local nativeOrientation = actualOrientation
+        and getNativeOrientation(fpp, actualOrientation)
+        or nil
+    local nativePitch = nativeOrientation
+        and nativePitchFromOrientation(nativeOrientation)
+        or nil
     if not nativePitch then
         return
     end
 
     runtime.nativePitch = nativePitch
     runtime.bodyProgress = normalizeBodyPitch(nativePitch)
-    if runtime.bodyProgress <= 0.0001 then
+    local wasBodyActive = runtime.bodyCorrectionActive
+    local bodyActive = wasBodyActive
+        and runtime.bodyProgress > 0.0001
+    if not wasBodyActive then
+        bodyActive = -nativePitch
+            >= Vars.BODY.START_PITCH_DOWN + BODY_ACTIVATION_HYSTERESIS_DEGREES
+    end
+    runtime.bodyCorrectionActive = bodyActive
+    if not bodyActive and not restorationPending then
         releaseCamera(fpp)
         setMode(MODE.NATIVE, "camera corrections inactive")
         return
     end
 
-    if not captureBaseline(fpp) then
+    local actualPosition = fpp:GetLocalPosition()
+    if not actualPosition
+        or not captureBaseline(fpp, actualPosition, actualOrientation) then
         return
     end
     setMode(MODE.BODY, "camera correction active")
-    composeAndWrite(fpp, context)
+    composeAndWrite(
+        fpp,
+        context,
+        actualPosition,
+        actualOrientation,
+        nativeOrientation,
+        nativePitch
+    )
 end
 
 function CameraCore.Suspend(reason)

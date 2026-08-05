@@ -59,9 +59,6 @@ function Helpers.DetachPlayer()
 end
 
 function Helpers.GetPlayer()
-    if not session.player then
-        Helpers.AttachPlayer(Game.GetPlayer())
-    end
     return session.player
 end
 
@@ -155,7 +152,9 @@ local function refreshPlayerState(target)
     local remoteVehicleHash = remoteVehicleID and remoteVehicleID.hash or nil
     local inspectionComponent = player:GetInspectionComponent()
     local playerState = player:GetPS()
-    local mountedVehicle = Game['GetMountedVehicle;GameObject'](player)
+    local mountedVehicle = vehicleState == 0
+        and Game['GetMountedVehicle;GameObject'](player)
+        or nil
     local knockedDown = detailedLocomotion == 29
         or detailedLocomotion == 31
         or landingState > 1

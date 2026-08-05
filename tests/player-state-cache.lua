@@ -10,6 +10,7 @@ local calls = {
     weaponSlot = 0,
     entityID = 0,
     detailedLocomotion = 0,
+    mountedVehicle = 0,
 }
 
 local values = {
@@ -107,6 +108,7 @@ Game = {
         return transactionSystem
     end,
     ['GetMountedVehicle;GameObject'] = function()
+        calls.mountedVehicle = calls.mountedVehicle + 1
         return nil
     end,
 }
@@ -141,16 +143,26 @@ assert(Helpers.RefreshPlayerState(snapshot) == snapshot, "snapshot table should 
 assert(snapshot.sceneTier == 1, "scene tier should be captured")
 assert(snapshot.onLadder and snapshot.traversal, "locomotion flags should share one read")
 assert(calls.detailedLocomotion == 2, "detailed locomotion should be read once per batch")
+assert(calls.mountedVehicle == 2, "mounted vehicle should be checked while vehicle state is clear")
 assert(calls.getPlayer == 0, "healthy cache should not reacquire the player")
 assert(calls.definitions == 1, "healthy cache should not reacquire definitions")
 assert(Helpers.GetFPP() == "fpp", "FPP component should use the cached player")
 assert(calls.getPlayer == 0, "FPP lookup should not reacquire the player")
 
+values.Vehicle = 1
+assert(Helpers.RefreshPlayerState(snapshot) == snapshot, "vehicle state should refresh")
+values.Vehicle = 0
+assert(snapshot.inVehicle, "vehicle blackboard state should mark the player in a vehicle")
+assert(calls.mountedVehicle == 2, "mounted vehicle lookup should be skipped in a known vehicle")
+
 blackboardFails = true
 assert(Helpers.RefreshPlayerState(snapshot) == nil, "failed batch should be rejected")
 blackboardFails = false
 assert(calls.getPlayer == 0, "failed batch should not retry a stale reference")
-assert(Helpers.GetPlayer() == player, "dropped cache should recover on the next access")
-assert(calls.getPlayer == 1, "later recovery should acquire the player once")
+assert(Helpers.GetPlayer() == nil, "cached access should not reacquire a dropped player")
+assert(calls.getPlayer == 0, "dropped cache should wait for explicit root acquisition")
+assert(Helpers.AttachPlayer(Game.GetPlayer()), "later root acquisition should recover the player")
+assert(Helpers.GetPlayer() == player, "explicitly recovered player should be cached")
+assert(calls.getPlayer == 1, "later root acquisition should acquire the player once")
 
 print("Player-state cache tests passed")
