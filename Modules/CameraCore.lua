@@ -59,6 +59,7 @@ local runtime = {
     pitchCeiling = nil,
     entryNativePitch = 0.0,
     entryNativeOrientation = nil,
+    pendingFreeLook = false,
     returnElapsed = 0,
     returnDuration = 0,
     returnFromYaw = 0,
@@ -597,6 +598,17 @@ local function updateBodyBlend(fpp, context, delta)
 
     runtime.bodyContextEligible = contextEligible
     runtime.bodyWeaponBlocked = weaponBlocked
+end
+
+local function bodyRestorationPending(context)
+    local transition = runtime.bodyTransition
+    if transition.active and transition.target > transition.from then
+        return true
+    end
+
+    return context
+        and not context.hasWeapon
+        and (context.bodyWeaponBlocked or runtime.bodyWeaponBlocked == true)
 end
 
 local function normalizeBodyPitch(nativePitch)
@@ -1266,12 +1278,18 @@ function CameraCore.BeginFreeLook(context)
     if runtime.mode == MODE.FREELOOK then
         return true
     end
+    if bodyRestorationPending(context) then
+        runtime.pendingFreeLook = true
+        Helpers.Log("freelook deferred until body restoration completes")
+        return true
+    end
 
     local fpp = Helpers.GetFPP()
     if not fpp or not captureBaseline(fpp) then
         return false
     end
 
+    runtime.pendingFreeLook = false
     if runtime.mode ~= MODE.RETURNING and context then
         -- Input callbacks can run after native mouse input but before our next
         -- onUpdate. Bring the local transform up to the newly sampled parent
@@ -1356,6 +1374,7 @@ function CameraCore.BeginFreeLook(context)
 end
 
 function CameraCore.EndFreeLook(fast)
+    runtime.pendingFreeLook = false
     if runtime.mode ~= MODE.FREELOOK and runtime.mode ~= MODE.RETURNING then
         return
     end
@@ -1433,6 +1452,7 @@ end
 function CameraCore.Update(delta, context)
     local fpp = Helpers.GetFPP()
     if not fpp then
+        runtime.pendingFreeLook = false
         resetBodyBlendTracking()
         clearInput()
         runtime.freeYaw = 0
@@ -1455,6 +1475,23 @@ function CameraCore.Update(delta, context)
     local inputDelta = math.min(elapsedDelta, 0.10)
     maintainInputUnlock()
     updateBodyBlend(fpp, context, elapsedDelta)
+
+    local restorationPending = bodyRestorationPending(context)
+    if restorationPending and runtime.mode == MODE.FREELOOK then
+        CameraCore.EndFreeLook(true)
+        runtime.pendingFreeLook = true
+    elseif restorationPending and runtime.mode == MODE.RETURNING then
+        CameraCore.EndFreeLook(true)
+    end
+
+    if runtime.pendingFreeLook then
+        if not context.freeEligible then
+            runtime.pendingFreeLook = false
+        elseif not restorationPending then
+            runtime.pendingFreeLook = false
+            CameraCore.BeginFreeLook(context)
+        end
+    end
 
     if (runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING)
         and not context.freeEligible then
@@ -1521,6 +1558,7 @@ end
 
 function CameraCore.Suspend(reason)
     local fpp = Helpers.GetFPP()
+    runtime.pendingFreeLook = false
     clearInput()
     runtime.freeYaw = 0
     runtime.freePitch = 0
@@ -1539,6 +1577,7 @@ end
 
 function CameraCore.Pause(reason)
     local fpp = Helpers.GetFPP()
+    runtime.pendingFreeLook = false
     clearInput()
     runtime.freeYaw = 0
     runtime.freePitch = 0

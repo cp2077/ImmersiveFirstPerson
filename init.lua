@@ -16,7 +16,7 @@ local weaponCameraBlocked = false
 local weaponCameraClearElapsed = 0.0
 local lastCameraBlockReason = nil
 
-local BODY_WEAPON_CLEAR_GRACE = 0.20
+local BODY_WEAPON_CLEAR_GRACE = 0.0
 
 local API = {}
 
