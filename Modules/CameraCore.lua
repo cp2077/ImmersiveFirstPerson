@@ -941,7 +941,7 @@ local function updateReturn(delta)
         runtime.entryNativePitch = 0.0
         runtime.entryNativeOrientation = nil
         setMode(MODE.BODY, "freelook return complete")
-        unlockNativeInput(Helpers.GetFPP())
+        unlockNativeInput()
     end
 end
 
@@ -1350,7 +1350,7 @@ function CameraCore.BeginFreeLook(context)
     runtime.freeLookParentDriftLogged = false
     runtime.freeLookParentOrientationDriftLogged = false
     runtime.freeLookLocalWriterLogged = false
-    lockNativeInput(fpp)
+    lockNativeInput()
     setMode(MODE.FREELOOK, "input pressed")
     return true
 end
@@ -1396,7 +1396,7 @@ function CameraCore.EndFreeLook(fast)
     ))
     -- Native camera input belongs to the player again as soon as the key is
     -- released. Any visual return animation continues without holding input.
-    unlockNativeInput(Helpers.GetFPP())
+    unlockNativeInput()
 
     local immediate = fast == true or not Config.inner.smoothRestore
     if immediate
@@ -1453,7 +1453,7 @@ function CameraCore.Update(delta, context)
 
     local elapsedDelta = math.max(tonumber(delta) or 0.0, 0.0)
     local inputDelta = math.min(elapsedDelta, 0.10)
-    maintainInputUnlock(fpp)
+    maintainInputUnlock()
     updateBodyBlend(fpp, context, elapsedDelta)
 
     if (runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING)
@@ -1462,7 +1462,7 @@ function CameraCore.Update(delta, context)
     end
 
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
-        maintainNativeInputLock(fpp)
+        maintainNativeInputLock()
         if runtime.mode == MODE.FREELOOK then
             applyFreeLookInput(
                 inputDelta,
@@ -1532,7 +1532,7 @@ function CameraCore.Suspend(reason)
     runtime.entryNativePitch = 0.0
     runtime.entryNativeOrientation = nil
     runtime.returnElapsed = 0
-    unlockNativeInput(fpp)
+    unlockNativeInput()
     releaseCamera(fpp)
     setMode(MODE.SUSPENDED, reason or "suspended")
 end
@@ -1549,7 +1549,7 @@ function CameraCore.Pause(reason)
     runtime.entryNativePitch = 0.0
     runtime.entryNativeOrientation = nil
     runtime.returnElapsed = 0
-    unlockNativeInput(fpp)
+    unlockNativeInput()
 
     -- Escape pauses CET updates, but REDengine renders another gameplay frame
     -- while closing the menu. Keep our already-composed transform and baseline

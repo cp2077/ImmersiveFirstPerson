@@ -397,14 +397,16 @@ local function findSessionTimestampByKey(targetKey, isTemporary)
 		for _, sessionFile in irpairs(dir(sessionDataDir)) do
 			if sessionFile.name:find(pattern) then
 				local sessionReader = io.open(sessionDataDir .. '/' .. sessionFile.name, 'r')
-				local sessionHeader = sessionReader:read('l')
-				sessionReader:close()
+				if sessionReader then
+					local sessionHeader = sessionReader:read('l')
+					sessionReader:close()
 
-				local sessionKeyStr = sessionHeader:match('^-- (%d+)$')
-				if sessionKeyStr then
-					local sessionKey = tonumber(sessionKeyStr)
-					if sessionKey == targetKey then
-						return tonumber((sessionFile.name:match(pattern)))
+					local sessionKeyStr = sessionHeader and sessionHeader:match('^-- (%d+)$')
+					if sessionKeyStr then
+						local sessionKey = tonumber(sessionKeyStr)
+						if sessionKey == targetKey then
+							return tonumber((sessionFile.name:match(pattern)))
+						end
 					end
 				end
 			end
@@ -424,6 +426,7 @@ local function writeSessionFile(sessionTimestamp, sessionKey, isTemporary, sessi
 
 	if not sessionFile then
 		raiseError(('Cannot write session file %q.'):format(sessionPath))
+		return
 	end
 
 	sessionFile:write('-- ')
