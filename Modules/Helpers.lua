@@ -19,8 +19,9 @@ function Helpers.Log(message)
     end
 
     local text = "[ImmersiveFirstPerson] " .. tostring(message)
-    if spdlog and spdlog.info then
-        spdlog.info(text)
+    -- CET release builds buffer info messages until shutdown, but flush warnings immediately.
+    if spdlog and spdlog.warning then
+        spdlog.warning(text)
     end
 end
 
