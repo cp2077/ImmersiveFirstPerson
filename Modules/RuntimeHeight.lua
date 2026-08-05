@@ -178,7 +178,8 @@ end
 function RuntimeHeight.Update(
     delta,
     player,
-    modEnabled,
+    lookAtEnabled,
+    heightEnabled,
     amountCentimeters,
     suppressionReason
 )
@@ -216,7 +217,7 @@ function RuntimeHeight.Update(
         return
     end
 
-    configureLookAt(player, modEnabled == true)
+    configureLookAt(player, lookAtEnabled == true)
 
     local shouldPoll = state.dirty or state.pollElapsed >= CONTRACT_POLL_INTERVAL
     if shouldPoll then
@@ -249,7 +250,7 @@ function RuntimeHeight.Update(
         0,
         MAXIMUM_HEIGHT_CM
     )
-    local targetBlend = modEnabled == true
+    local targetBlend = heightEnabled == true
         and amount > 0
         and suppressionReason == nil
         and amount / MAXIMUM_HEIGHT_CM

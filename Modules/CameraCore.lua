@@ -55,6 +55,7 @@ local runtime = {
     freePitch = 0,
     rawYaw = 0,
     rawPitch = 0,
+    freeFollowSpeedLimit = 0,
     pitchFloor = nil,
     pitchCeiling = nil,
     entryNativePitch = 0.0,
@@ -87,6 +88,9 @@ local runtime = {
         mouseYAbsolute = 0.0,
         mouseXMaximum = 0.0,
         mouseYMaximum = 0.0,
+        mouseSpeedMaximum = 0.0,
+        cameraSpeedMaximum = 0.0,
+        speedLimitMaximum = 0.0,
     },
     lock = {
         active = false,
@@ -124,6 +128,10 @@ local function clearInput()
     runtime.input.stickY = 0
 end
 
+local function resetFreeLookMotion()
+    runtime.freeFollowSpeedLimit = 0
+end
+
 local function clearInputStats()
     local stats = runtime.inputStats
     stats.mouseXCount = 0
@@ -134,6 +142,9 @@ local function clearInputStats()
     stats.mouseYAbsolute = 0.0
     stats.mouseXMaximum = 0.0
     stats.mouseYMaximum = 0.0
+    stats.mouseSpeedMaximum = 0.0
+    stats.cameraSpeedMaximum = 0.0
+    stats.speedLimitMaximum = 0.0
 end
 
 local function vectorCopy(value)
@@ -348,6 +359,20 @@ local function readNumberProperty(object, property, fallback)
     return fallback
 end
 
+local function getCameraZoom(fpp)
+    -- The live aim/scanner zoom is exposed through GetZoom(). Reading the Lua
+    -- wrapper field only returns a stale/default value on current CET builds.
+    local ok, zoom = pcall(function()
+        return fpp:GetZoom()
+    end)
+    if ok and finite(zoom) and zoom > 0.05 then
+        return zoom
+    end
+
+    zoom = readNumberProperty(fpp, "zoom", 1.0)
+    return zoom > 0.05 and zoom or 1.0
+end
+
 local function lockNativeInput()
     if runtime.lock.active then
         return
@@ -408,9 +433,6 @@ local function releaseCamera(fpp)
                 toVector(runtime.baseline.position),
                 toQuaternion(runtime.baseline.orientation)
             )
-            if not Config.inner.dontChangeFov then
-                fpp:SetFOV(runtime.baseline.fov)
-            end
         end)
     end
 
@@ -621,7 +643,7 @@ local function normalizeBodyPitch(nativePitch)
     )
 end
 
-function CameraCore.EvaluateBody(nativePitch, crouching, baselineFov)
+function CameraCore.EvaluateBody(nativePitch, crouching)
     local body = Vars.BODY
     local progress = normalizeBodyPitch(nativePitch)
 
@@ -642,17 +664,12 @@ function CameraCore.EvaluateBody(nativePitch, crouching, baselineFov)
         pitchCorrection = pitchCorrection * body.CROUCH_PITCH_MULTIPLIER
     end
 
-    local fov = baselineFov
-        + (body.FOV_REFERENCE - baselineFov) * math.min(1.0, progress * 2.0)
-        + body.FOV_CORRECTION * progress
-
     return {
         progress = progress,
         lateral = 0.0,
         forward = forward,
         vertical = vertical,
         pitch = pitchCorrection,
-        fov = fov,
     }
 end
 
@@ -814,6 +831,33 @@ local function stepHeadCone(
     return resultYaw, resultPitch
 end
 
+local function constrainHeadCone(yaw, pitch, hasWeapon, basePitch)
+    local maxYaw, maxPitchDown, maxPitchUp = getFreeLookLimits(hasWeapon)
+    maxPitchDown, maxPitchUp = getAvailablePitchLimits(hasWeapon, basePitch)
+    if maxYaw <= 0.0001 then
+        return 0.0, 0.0
+    end
+
+    local normalizedYaw = yaw / maxYaw
+    local normalizedPitch = normalizePitch(pitch, maxPitchDown, maxPitchUp)
+    local power = hasWeapon
+        and Vars.FREELOOK.COMBAT_CONE_POWER
+        or Vars.FREELOOK.CONE_POWER
+    local radius = coneRadius(normalizedYaw, normalizedPitch, power)
+    if radius > 1.0 then
+        normalizedYaw = normalizedYaw / radius
+        normalizedPitch = normalizedPitch / radius
+    end
+
+    local resultYaw = normalizedYaw * maxYaw
+    local resultPitch = normalizedPitch
+        * signedPitchLimit(normalizedPitch, maxPitchDown, maxPitchUp)
+    if not hasWeapon then
+        resultPitch = math.max(resultPitch, getPitchFloor(resultYaw, maxYaw, basePitch))
+    end
+    return resultYaw, resultPitch
+end
+
 function CameraCore.EvaluateFreeLook(yaw, _, hasWeapon)
     local free = Vars.FREELOOK
     local maxYaw = getFreeLookLimits(hasWeapon)
@@ -834,7 +878,6 @@ function CameraCore.EvaluateFreeLook(yaw, _, hasWeapon)
             forward = 0.0,
             vertical = 0.0,
             roll = 0.0,
-            fovDelta = 0.0,
         }
     end
 
@@ -871,7 +914,6 @@ function CameraCore.EvaluateFreeLook(yaw, _, hasWeapon)
         forward = -free.MAX_BACK_OFFSET * backProgress,
         vertical = 0.0,
         roll = roll,
-        fovDelta = 0.0,
     }
 end
 
@@ -902,34 +944,125 @@ end
 
 local function applyFreeLookInput(delta, fpp, hasWeapon, basePitch)
     local free = Vars.FREELOOK
+    local previousYaw = runtime.freeYaw
+    local previousPitch = runtime.freePitch
     local sensitivity = Config.inner.freeLookSensitivity / free.DEFAULT_SENSITIVITY
-    local zoom = readNumberProperty(fpp, "zoom", 1.0)
-    if zoom <= 0.05 then
-        zoom = 1.0
-    end
+    local zoom = getCameraZoom(fpp)
 
     local invertX = runtime.invertX and -1.0 or 1.0
     local invertY = runtime.invertY and -1.0 or 1.0
     local mouseScale = free.MOUSE_DEGREES_PER_UNIT * sensitivity / zoom
-    local yawDelta = -runtime.input.mouseX * invertX * mouseScale
-    local pitchDelta = runtime.input.mouseY * invertY * mouseScale
-
-    local controllerScale = free.CONTROLLER_DEGREES_PER_SECOND * sensitivity * delta
-    yawDelta = yawDelta
-        - inputAxis(runtime.input.stickX) * invertX * controllerScale
-    pitchDelta = pitchDelta
-        + inputAxis(runtime.input.stickY) * invertY * controllerScale
-
-    runtime.freeYaw, runtime.freePitch = stepHeadCone(
-        runtime.freeYaw,
-        runtime.freePitch,
-        yawDelta,
-        pitchDelta,
-        hasWeapon,
-        basePitch
+    local mouseYawDelta = -runtime.input.mouseX * invertX * mouseScale
+    local mousePitchDelta = runtime.input.mouseY * invertY * mouseScale
+    local mouseDegrees = math.sqrt(
+        mouseYawDelta * mouseYawDelta + mousePitchDelta * mousePitchDelta
     )
-    runtime.rawYaw = runtime.freeYaw
-    runtime.rawPitch = runtime.freePitch
+    local mouseSpeed = delta > 0.0001 and mouseDegrees / delta or 0.0
+    runtime.inputStats.mouseSpeedMaximum = math.max(
+        runtime.inputStats.mouseSpeedMaximum,
+        mouseSpeed
+    )
+    local controllerScale = free.CONTROLLER_DEGREES_PER_SECOND * sensitivity * delta
+    local controllerYawDelta = -inputAxis(runtime.input.stickX)
+        * invertX
+        * controllerScale
+    local controllerPitchDelta = inputAxis(runtime.input.stickY)
+        * invertY
+        * controllerScale
+    local yawDelta = mouseYawDelta + controllerYawDelta
+    local pitchDelta = mousePitchDelta + controllerPitchDelta
+
+    local smoothness = clamp(
+        tonumber(Config.inner.freeLookSmoothness) or 0,
+        0,
+        100
+    )
+    if smoothness <= 0 then
+        -- This is deliberately a separate direct-input path. Do not route zero
+        -- through the target follower or retain any acceleration/catch-up state.
+        runtime.freeYaw, runtime.freePitch = stepHeadCone(
+            runtime.freeYaw,
+            runtime.freePitch,
+            yawDelta,
+            pitchDelta,
+            hasWeapon,
+            basePitch
+        )
+        runtime.rawYaw = runtime.freeYaw
+        runtime.rawPitch = runtime.freePitch
+        resetFreeLookMotion()
+    else
+        runtime.rawYaw, runtime.rawPitch = stepHeadCone(
+            runtime.rawYaw,
+            runtime.rawPitch,
+            yawDelta,
+            pitchDelta,
+            hasWeapon,
+            basePitch
+        )
+
+        local sliderProgress = smoothness / 100.0
+        -- A linear blend feels almost direct until the final tenth because each
+        -- frame immediately consumes most of the target gap. This ease-out curve
+        -- gives the middle of the UI range a visible amount of smoothing while
+        -- preserving an exact direct-input state at zero.
+        local smoothingAmount = 1.0 - (1.0 - sliderProgress) ^ 3
+        local smoothingRange = 100.0 * smoothingAmount
+        runtime.freeFollowSpeedLimit = math.max(
+            runtime.freeFollowSpeedLimit,
+            free.SMOOTH_BASE_MAX_SPEED + mouseSpeed * free.SMOOTH_MOUSE_ACCELERATION
+        )
+        runtime.inputStats.speedLimitMaximum = math.max(
+            runtime.inputStats.speedLimitMaximum,
+            runtime.freeFollowSpeedLimit
+        )
+
+        local yawGap = runtime.rawYaw - runtime.freeYaw
+        local pitchGap = runtime.rawPitch - runtime.freePitch
+        local gap = math.sqrt(yawGap * yawGap + pitchGap * pitchGap)
+        if gap > 0.0001 then
+            -- Smoothness blends the complete follower from direct input to the
+            -- fully speed-limited/eased response. Small nonzero values therefore
+            -- stay close to direct input instead of inheriting the full catch-up.
+            local directSpeed = gap / math.max(delta, 0.0001)
+            local limitedSpeed = math.min(directSpeed, runtime.freeFollowSpeedLimit)
+            local followSpeed = directSpeed
+                + (limitedSpeed - directSpeed) * smoothingAmount
+            local easedProgress = clamp(gap / smoothingRange, 0.0, 1.0)
+            local followProgress = 1.0
+                + (easedProgress - 1.0) * smoothingAmount
+            local step = math.min(
+                gap,
+                followSpeed * followProgress * delta
+            )
+            local scale = step / gap
+            runtime.freeYaw = runtime.freeYaw + yawGap * scale
+            runtime.freePitch = runtime.freePitch + pitchGap * scale
+            runtime.freeYaw, runtime.freePitch = constrainHeadCone(
+                runtime.freeYaw,
+                runtime.freePitch,
+                hasWeapon,
+                basePitch
+            )
+        end
+
+        local remainingYaw = runtime.rawYaw - runtime.freeYaw
+        local remainingPitch = runtime.rawPitch - runtime.freePitch
+        if remainingYaw * remainingYaw + remainingPitch * remainingPitch < 0.0001 then
+            runtime.freeYaw = runtime.rawYaw
+            runtime.freePitch = runtime.rawPitch
+            resetFreeLookMotion()
+        end
+    end
+    local cameraDegrees = math.sqrt(
+        (runtime.freeYaw - previousYaw) ^ 2
+            + (runtime.freePitch - previousPitch) ^ 2
+    )
+    local cameraSpeed = delta > 0.0001 and cameraDegrees / delta or 0.0
+    runtime.inputStats.cameraSpeedMaximum = math.max(
+        runtime.inputStats.cameraSpeedMaximum,
+        cameraSpeed
+    )
     runtime.input.mouseX = 0
     runtime.input.mouseY = 0
 end
@@ -1076,8 +1209,7 @@ local function composeAndWrite(fpp, context)
     local bodyDriverPitch = effectiveNativePitch
     local body = CameraCore.EvaluateBody(
         bodyDriverPitch,
-        context.crouching,
-        runtime.baseline.fov
+        context.crouching
     )
     local bodyBlend = clamp(tonumber(runtime.bodyBlend) or 0.0, 0.0, 1.0)
 
@@ -1090,7 +1222,6 @@ local function composeAndWrite(fpp, context)
         forward = 0.0,
         vertical = 0.0,
         roll = 0.0,
-        fovDelta = 0.0,
     }
     if runtime.mode == MODE.FREELOOK or runtime.mode == MODE.RETURNING then
         freeOffset = CameraCore.EvaluateFreeLook(
@@ -1105,8 +1236,6 @@ local function composeAndWrite(fpp, context)
     bodyInfluence = bodyInfluence * bodyBlend
     runtime.bodyProgress = body.progress * bodyInfluence
     runtime.bodyPitch = body.pitch * bodyInfluence
-    body.fov = runtime.baseline.fov
-        + (body.fov - runtime.baseline.fov) * bodyInfluence
 
     local bodyCurveMotion = NativeCameraCurve.OffsetToReference(
         compositionNativePitch,
@@ -1119,14 +1248,9 @@ local function composeAndWrite(fpp, context)
         runtime.baseline.fov
     )
     -- OffsetToReference also contains virtual freelook pitch motion. Fade its
-    -- ordinary FOV/body component during weapon changes.
-    -- Full physical FOV compensation was calibrated alongside the mod's FOV
-    -- correction. At a deliberately fixed narrow FOV it looks too far forward,
-    -- so retain a reduced amount without weakening any other camera channel.
-    local bodyCurveInfluence = bodyBlend
-    if Config.inner.dontChangeFov then
-        bodyCurveInfluence = bodyCurveInfluence * FIXED_FOV_POSITION_COMPENSATION
-    end
+    -- ordinary body component during weapon changes. The camera FOV always
+    -- remains native, so use the corresponding positional compensation.
+    local bodyCurveInfluence = bodyBlend * FIXED_FOV_POSITION_COMPENSATION
     bodySpaceMotion.forward = bodySpaceMotion.forward
         - bodyCurveMotion.forward * (1.0 - bodyCurveInfluence)
     bodySpaceMotion.vertical = bodySpaceMotion.vertical
@@ -1222,9 +1346,6 @@ local function composeAndWrite(fpp, context)
 
     local ok = pcall(function()
         fpp:SetLocalTransform(toVector(position), orientation)
-        if not Config.inner.dontChangeFov then
-            fpp:SetFOV(body.fov + freeOffset.fovDelta)
-        end
     end)
     if not ok then
         return false
@@ -1359,6 +1480,7 @@ function CameraCore.BeginFreeLook(context)
     end
 
     runtime.returnElapsed = 0
+    resetFreeLookMotion()
     clearInput()
     runtime.inputSeen.mouseX = false
     runtime.inputSeen.mouseY = false
@@ -1380,6 +1502,7 @@ function CameraCore.EndFreeLook(fast)
     end
 
     clearInput()
+    resetFreeLookMotion()
     if runtime.mode == MODE.FREELOOK then
         local fpp = Helpers.GetFPP()
         local actualOrientation = fpp and fpp:GetLocalOrientation()
@@ -1400,7 +1523,9 @@ function CameraCore.EndFreeLook(fast)
     end
     Helpers.Log((
         "freelook input: X[n=%d sum=%.2f abs=%.2f max=%.2f] "
-            .. "Y[n=%d sum=%.2f abs=%.2f max=%.2f]; yaw=%.2f pitch=%.2f"
+            .. "Y[n=%d sum=%.2f abs=%.2f max=%.2f] "
+            .. "mouseMax=%.0fdeg/s limitMax=%.0fdeg/s cameraMax=%.0fdeg/s; "
+            .. "yaw=%.2f pitch=%.2f"
     ):format(
         runtime.inputStats.mouseXCount,
         runtime.inputStats.mouseXSum,
@@ -1410,6 +1535,9 @@ function CameraCore.EndFreeLook(fast)
         runtime.inputStats.mouseYSum,
         runtime.inputStats.mouseYAbsolute,
         runtime.inputStats.mouseYMaximum,
+        runtime.inputStats.mouseSpeedMaximum,
+        runtime.inputStats.speedLimitMaximum,
+        runtime.inputStats.cameraSpeedMaximum,
         runtime.freeYaw,
         runtime.freePitch
     ))
@@ -1417,7 +1545,12 @@ function CameraCore.EndFreeLook(fast)
     -- released. Any visual return animation continues without holding input.
     unlockNativeInput()
 
-    local immediate = fast == true or not Config.inner.smoothRestore
+    local returnSmoothness = clamp(
+        tonumber(Config.inner.freeLookReturnSmoothness) or 0,
+        0,
+        100
+    )
+    local immediate = fast == true or returnSmoothness <= 0
     if immediate
         or (math.abs(runtime.freeYaw) < 0.001 and math.abs(runtime.freePitch) < 0.001) then
         runtime.freeYaw = 0
@@ -1432,13 +1565,10 @@ function CameraCore.EndFreeLook(fast)
         return
     end
 
-    local speed = clamp(Config.inner.smoothRestoreSpeed, 1, 200)
     local free = Vars.FREELOOK
-    runtime.returnDuration = clamp(
-        free.DEFAULT_RETURN_DURATION * 15.0 / speed,
-        free.MIN_RETURN_DURATION,
-        free.MAX_RETURN_DURATION
-    )
+    runtime.returnDuration = free.MIN_RETURN_DURATION
+        + (free.MAX_RETURN_DURATION - free.MIN_RETURN_DURATION)
+            * ((returnSmoothness - 1.0) / 99.0)
     runtime.returnElapsed = 0
     runtime.returnFromYaw = runtime.freeYaw
     runtime.returnFromPitch = runtime.freePitch
@@ -1455,6 +1585,7 @@ function CameraCore.Update(delta, context)
         runtime.pendingFreeLook = false
         resetBodyBlendTracking()
         clearInput()
+        resetFreeLookMotion()
         runtime.freeYaw = 0
         runtime.freePitch = 0
         runtime.rawYaw = 0
@@ -1549,17 +1680,11 @@ function CameraCore.Update(delta, context)
     composeAndWrite(fpp, context)
 end
 
-function CameraCore.RestoreBaselineFOV()
-    local fpp = Helpers.GetFPP()
-    if fpp and runtime.baseline then
-        fpp:SetFOV(runtime.baseline.fov)
-    end
-end
-
 function CameraCore.Suspend(reason)
     local fpp = Helpers.GetFPP()
     runtime.pendingFreeLook = false
     clearInput()
+    resetFreeLookMotion()
     runtime.freeYaw = 0
     runtime.freePitch = 0
     runtime.rawYaw = 0
@@ -1579,6 +1704,7 @@ function CameraCore.Pause(reason)
     local fpp = Helpers.GetFPP()
     runtime.pendingFreeLook = false
     clearInput()
+    resetFreeLookMotion()
     runtime.freeYaw = 0
     runtime.freePitch = 0
     runtime.rawYaw = 0

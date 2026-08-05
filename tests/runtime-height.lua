@@ -46,7 +46,7 @@ local RuntimeHeight = require("Modules/RuntimeHeight")
 -- CET may return a fresh Lua wrapper for the same native player every call.
 -- The transition must still finish instead of restarting from zero.
 for _ = 1, 10 do
-    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, 30, nil)
+    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 30, nil)
 end
 near(RuntimeHeight.GetEffectiveHeightCentimeters(), 30, 0.001, "same-player wrapper transition")
 assert(RuntimeHeight.IsAvailable(), "compatible graph should be available")
@@ -54,14 +54,28 @@ near(RuntimeHeight.GetEstimatedHeightCentimeters(), 201, 0.001, "estimated maxim
 
 -- Suppression and restoration each complete through the same 100 ms blend.
 for _ = 1, 10 do
-    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, 30, "vehicle occupancy")
+    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 30, "vehicle occupancy")
 end
 near(RuntimeHeight.GetEffectiveHeightCentimeters(), 0, 0.001, "suppressed height")
 
 for _ = 1, 10 do
-    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, 30, nil)
+    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 30, nil)
 end
 near(RuntimeHeight.GetEffectiveHeightCentimeters(), 30, 0.001, "restored height")
+
+-- Look-at redirection follows immersive view while the graph height has its
+-- own switch; neither feature should implicitly disable the other.
+for _ = 1, 10 do
+    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, false, 30, nil)
+end
+near(RuntimeHeight.GetEffectiveHeightCentimeters(), 0, 0.001, "independently disabled height")
+assert(lookAtWrites[#lookAtWrites] == true, "height toggle should preserve look-at redirection")
+
+for _ = 1, 10 do
+    RuntimeHeight.Update(0.016, playerWrapper(42, 1), false, true, 30, nil)
+end
+near(RuntimeHeight.GetEffectiveHeightCentimeters(), 30, 0.001, "independently enabled height")
+assert(lookAtWrites[#lookAtWrites] == false, "immersive toggle should disable look-at redirection")
 
 RuntimeHeight.Shutdown(playerWrapper(42, 1))
 near(writes[#writes].value, 0, 0.0001, "shutdown graph input")

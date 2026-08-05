@@ -1,6 +1,6 @@
 return {
     CONFIG_FILE_NAME = "config.json",
-    CONFIG_VERSION = 5,
+    CONFIG_VERSION = 7,
 
     BODY = {
         -- Native look-down angle where body-presence correction starts / reaches full strength.
@@ -10,9 +10,6 @@ return {
         VERTICAL_OFFSET = -0.125,
         FORWARD_OFFSET = -0.100,
         PITCH_CORRECTION = -9.0,
-        FOV_CORRECTION = -8.0,
-        FOV_REFERENCE = 68.23,
-
         CROUCH_VERTICAL_MULTIPLIER = 1.35,
         CROUCH_FORWARD_MULTIPLIER = 1.17,
         CROUCH_PITCH_MULTIPLIER = 1.50,
@@ -25,6 +22,9 @@ return {
         MOUSE_DEGREES_PER_UNIT = 0.07,
         CONTROLLER_DEGREES_PER_SECOND = 120.0,
         CONTROLLER_DEADZONE = 0.12,
+        SMOOTH_BASE_MAX_SPEED = 180.0,
+        SMOOTH_MOUSE_ACCELERATION = 0.20,
+        DEFAULT_SMOOTHNESS = 0,
         EDGE_SOFT_START = 0.70,
         CONE_POWER = 4.0,
         COMBAT_CONE_POWER = 2.0,

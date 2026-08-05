@@ -4,11 +4,12 @@ local Vars = require("Modules/Vars")
 local defaults = {
     version = Vars.CONFIG_VERSION,
     debugLogging = true,
+    immersiveViewEnabled = true,
+    freeLookEnabled = true,
+    heightAdjustmentEnabled = true,
     freeLookSensitivity = Vars.FREELOOK.DEFAULT_SENSITIVITY,
-    smoothRestore = false,
-    smoothRestoreSpeed = 15,
-    freeLookInCombat = true,
-    dontChangeFov = false,
+    freeLookSmoothness = Vars.FREELOOK.DEFAULT_SMOOTHNESS,
+    freeLookReturnSmoothness = 50,
     heightAdjustmentAmount = 0,
 }
 
@@ -72,12 +73,6 @@ local function migrate(config)
     config.mouseNativeSensX = nil
     config.mouseNativeSensY = nil
 
-    if previousVersion < 2 then
-        -- The old implementation always enabled weapon freelook even though its saved
-        -- default said false. Preserve the behavior users actually had.
-        config.freeLookInCombat = true
-    end
-
     if previousVersion < 4 then
         -- Version 3 stored a pitch angle, while version 4 stores centimetres and
         -- controls different native systems. Do not reinterpret a value such as
@@ -96,7 +91,47 @@ local function migrate(config)
         end
     end
 
-    config.heightAdjustmentEnabled = nil
+    if previousVersion < 6 then
+        -- Version 6 replaces two enable/speed pairs with direct 0..100
+        -- smoothness values. Zero is the explicit off state.
+        if config.smoothFreeLook == false then
+            config.freeLookSmoothness = 0
+        else
+            config.freeLookSmoothness = tonumber(config.freeLookInputRange)
+                or defaults.freeLookSmoothness
+        end
+
+        if config.smoothRestore == true then
+            local oldSpeed = clamp(tonumber(config.smoothRestoreSpeed) or 15, 1, 200)
+            local free = Vars.FREELOOK
+            local duration = clamp(
+                free.DEFAULT_RETURN_DURATION * 15.0 / oldSpeed,
+                free.MIN_RETURN_DURATION,
+                free.MAX_RETURN_DURATION
+            )
+            local durationProgress = (duration - free.MIN_RETURN_DURATION)
+                / (free.MAX_RETURN_DURATION - free.MIN_RETURN_DURATION)
+            config.freeLookReturnSmoothness = math.floor(
+                1.0 + durationProgress * 99.0 + 0.5
+            )
+        else
+            config.freeLookReturnSmoothness = 0
+        end
+
+        config.immersiveViewEnabled = true
+        config.heightAdjustmentEnabled = true
+    end
+
+    if previousVersion < 7 then
+        config.freeLookEnabled = true
+    end
+
+    config.smoothFreeLook = nil
+    config.freeLookInputRange = nil
+    config.smoothRestore = nil
+    config.smoothRestoreSpeed = nil
+    config.freeLookInCombat = nil
+    config.dontChangeFov = nil
     config.heightAnimationEnabled = nil
     config.heightHumanoidEnabled = nil
     config.heightCapsuleEnabled = nil
@@ -118,11 +153,20 @@ local function validate(config)
     end
 
     result.freeLookSensitivity = clamp(tonumber(result.freeLookSensitivity) or defaults.freeLookSensitivity, 1, 100)
-    result.smoothRestoreSpeed = clamp(tonumber(result.smoothRestoreSpeed) or defaults.smoothRestoreSpeed, 1, 200)
+    result.freeLookSmoothness = math.floor(clamp(
+        tonumber(result.freeLookSmoothness) or defaults.freeLookSmoothness,
+        0,
+        100
+    ) + 0.5)
+    result.freeLookReturnSmoothness = math.floor(clamp(
+        tonumber(result.freeLookReturnSmoothness) or defaults.freeLookReturnSmoothness,
+        0,
+        100
+    ) + 0.5)
     result.debugLogging = result.debugLogging == true
-    result.smoothRestore = result.smoothRestore == true
-    result.freeLookInCombat = result.freeLookInCombat == true
-    result.dontChangeFov = result.dontChangeFov == true
+    result.immersiveViewEnabled = result.immersiveViewEnabled == true
+    result.freeLookEnabled = result.freeLookEnabled == true
+    result.heightAdjustmentEnabled = result.heightAdjustmentEnabled == true
     result.heightAdjustmentAmount = math.floor(clamp(
         tonumber(result.heightAdjustmentAmount) or defaults.heightAdjustmentAmount,
         0,

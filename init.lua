@@ -183,20 +183,20 @@ local function buildCameraContext(delta, state)
     -- clear grace for the frame gap at the end of those animations.
     local reportsArmed = hasWeapon or Helpers.GetWeaponState() ~= 0
     local blocksCameraForWeapon = updateWeaponCameraBlock(reportsArmed, delta)
-    local commonEligible = isEnabled
-        and cameraBlockReason == nil
+    local commonEligible = isEnabled and cameraBlockReason == nil
+    local immersiveEligible = commonEligible
+        and Config.inner.immersiveViewEnabled
     return {
         -- Weapon draw/holster retains the ordinary FPP parent, so CameraCore may
         -- crossfade the additive body correction. Truly incompatible contexts
         -- still suspend immediately instead of inheriting this transition.
-        bodyContextEligible = commonEligible,
+        bodyContextEligible = immersiveEligible,
         bodyWeaponBlocked = blocksCameraForWeapon,
-        bodyEligible = commonEligible and not blocksCameraForWeapon,
+        bodyEligible = immersiveEligible and not blocksCameraForWeapon,
         -- Ladder locomotion swaps among several native camera profiles while
         -- moving, including a forced recenter profile. Freezing that parent for
         -- freelook can strand REDengine's pitch floor at the centre afterward.
-        freeEligible = commonEligible
-            and (not hasWeapon or Config.inner.freeLookInCombat),
+        freeEligible = commonEligible and Config.inner.freeLookEnabled,
         crouching = Helpers.IsCrouching(),
         hasWeapon = hasWeapon,
     }
@@ -437,7 +437,8 @@ function ImmersiveFirstPerson.Init()
         RuntimeHeight.Update(
             delta,
             player,
-            isEnabled,
+            isEnabled and Config.inner.immersiveViewEnabled,
+            isEnabled and Config.inner.heightAdjustmentEnabled,
             Config.inner.heightAdjustmentAmount,
             heightSuppressionReason
         )
@@ -475,64 +476,70 @@ function ImmersiveFirstPerson.Init()
             end
         end
 
+        Config.inner.immersiveViewEnabled, changed = ImGui.Checkbox(
+            "Enable immersive view",
+            Config.inner.immersiveViewEnabled
+        )
+        if changed then
+            Config.SaveConfig()
+        end
+
+        Config.inner.freeLookEnabled, changed = ImGui.Checkbox(
+            "Enable FreeLook",
+            Config.inner.freeLookEnabled
+        )
+        if changed then
+            Config.SaveConfig()
+            if not Config.inner.freeLookEnabled then
+                CameraCore.AbortFreeLook()
+            end
+        end
+
+        Config.inner.heightAdjustmentEnabled, changed = ImGui.Checkbox(
+            "Enable height adjustment",
+            Config.inner.heightAdjustmentEnabled
+        )
+        if changed then
+            Config.SaveConfig()
+            RuntimeHeight.MarkDirty()
+        end
+
         drawCompatibilityWarnings()
 
-        Config.inner.debugLogging, changed = ImGui.Checkbox(
-            "Debug logging",
-            Config.inner.debugLogging
+        ImGui.Separator()
+        ImGui.Text("FreeLook")
+
+        Config.inner.freeLookSmoothness, changed = ImGui.SliderInt(
+            "Smoothness",
+            math.floor(Config.inner.freeLookSmoothness),
+            0,
+            100
         )
         tooltipIfHovered(
-            "Controls routine diagnostic logs. Errors are still reported when disabled."
+            "0 disables smoothing. Higher values ease more gradually near the target."
         )
         if changed then
             Config.SaveConfig()
         end
 
-        Config.inner.dontChangeFov, changed = ImGui.Checkbox(
-            "Don't change FOV (may cause clipping)",
-            Config.inner.dontChangeFov
+        Config.inner.freeLookReturnSmoothness, changed = ImGui.SliderInt(
+            "Return smoothness",
+            math.floor(Config.inner.freeLookReturnSmoothness),
+            0,
+            100
+        )
+        tooltipIfHovered(
+            "0 returns instantly. Higher values return more gradually."
         )
         if changed then
             Config.SaveConfig()
-            if Config.inner.dontChangeFov then
-                CameraCore.RestoreBaselineFOV()
-            end
-        end
-
-        Config.inner.smoothRestore, changed = ImGui.Checkbox(
-            "Smooth FreeLook return",
-            Config.inner.smoothRestore
-        )
-        if changed then
-            Config.SaveConfig()
-        end
-
-        if Config.inner.smoothRestore then
-            Config.inner.smoothRestoreSpeed, changed = ImGui.SliderInt(
-                "Return speed",
-                math.floor(Config.inner.smoothRestoreSpeed),
-                1,
-                200
-            )
-            tooltipIfHovered("Higher values return to native view faster.")
-            if changed then
-                Config.SaveConfig()
-            end
         end
 
         Config.inner.freeLookSensitivity, changed = ImGui.SliderInt(
-            "FreeLook sensitivity",
+            "Sensitivity",
             math.floor(Config.inner.freeLookSensitivity),
             1,
             100
-        )
-        if changed then
-            Config.SaveConfig()
-        end
-
-        Config.inner.freeLookInCombat, changed = ImGui.Checkbox(
-            "Enable FreeLook with a weapon",
-            Config.inner.freeLookInCombat
         )
         if changed then
             Config.SaveConfig()
@@ -542,7 +549,7 @@ function ImmersiveFirstPerson.Init()
         ImGui.Text("Height")
         if RuntimeHeight.IsAvailable() then
             Config.inner.heightAdjustmentAmount, changed = ImGui.SliderInt(
-                "Height increase",
+                "Increase",
                 math.floor(Config.inner.heightAdjustmentAmount),
                 0,
                 RuntimeHeight.GetMaximumHeightCentimeters(),
@@ -561,17 +568,32 @@ function ImmersiveFirstPerson.Init()
                 ImGui.PopStyleColor(1)
             end
             local suppressionReason = RuntimeHeight.GetSuppressionReason()
-            if Config.inner.heightAdjustmentAmount > 0 and suppressionReason then
+            if Config.inner.heightAdjustmentEnabled
+                and Config.inner.heightAdjustmentAmount > 0
+                and suppressionReason then
                 ImGui.TextWrapped("Temporarily disabled: " .. suppressionReason)
             end
             ImGui.Text(("Estimated height: ~%.0f cm"):format(
                 RuntimeHeight.GetEstimatedHeightCentimeters()
             ))
         else
-            ImGui.TextDisabled("Height slider unavailable")
+            ImGui.TextDisabled("Controls unavailable")
             ImGui.TextWrapped(
-                "The bundled height override is missing, incompatible, or overridden by another player animgraph."
+                "ImmersiveFirstPersonHeight.archive is missing or overridden by another mod modifying player animgraph."
             )
+        end
+
+        ImGui.Separator()
+        ImGui.Text("Debug")
+        Config.inner.debugLogging, changed = ImGui.Checkbox(
+            "Logging",
+            Config.inner.debugLogging
+        )
+        tooltipIfHovered(
+            "Controls routine diagnostic logs. Errors are still reported when disabled."
+        )
+        if changed then
+            Config.SaveConfig()
         end
 
         --[[ Native camera sampling UI is retained for future curve captures.

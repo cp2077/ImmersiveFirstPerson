@@ -6,7 +6,7 @@
 2. FreeLook for rotating V's view without rotating their body, with mouse and controller input.
 3. Runtime-adjustable skeletal height for V, plus an independent NPC head-look target fix.
 
-Body correction runs while looking down during ordinary gameplay and yields to vehicles, workspots, traversal, takedowns, knockdowns, body carrying, and camera-controlled scenes. FreeLook can optionally remain available while a weapon is equipped.
+Body correction runs while looking down during ordinary gameplay and yields to vehicles, workspots, traversal, takedowns, knockdowns, body carrying, and camera-controlled scenes. FreeLook remains available while a weapon is equipped, and the mod leaves the game's FOV unchanged.
 
 The bundled height override replaces `player_base.animgraph` with a versioned two-branch blend. One branch is vanilla; the other raises V's COG and lengthens both thigh and shin segments while the Root-space foot targets remain grounded. CET drives the blend over 100 ms, so the setting can change at runtime without moving `gameFPPCameraComponent`, changing camera pitch, or restarting the game.
 
@@ -30,7 +30,7 @@ Bindings live in two CET Overlay sections:
 1. **Hotkeys** -> Toggle Enabled
 2. **Inputs** -> FreeLook
 
-The CET Overlay exposes camera and FreeLook settings, a `+0 cm` to `+30 cm` height slider when the compatible height graph is loaded, and a **Debug logging** toggle (enabled by default). Generic NPC gaze correction is automatic while the mod is enabled. Start around +5 to +8 cm.
+The CET Overlay exposes independent **Immersive view**, **FreeLook**, and **Height adjustment** switches, FreeLook settings, a `+0 cm` to `+30 cm` height slider when the compatible height graph is loaded, and a **Debug** section. Generic NPC gaze correction follows the immersive-view switch. Start around +5 to +8 cm.
 
 ----
 
