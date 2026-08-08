@@ -51,5 +51,12 @@ cp -r ../../Modules bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerso
 cp "$native_dll" red4ext/plugins/ImmersiveFirstPerson/ImmersiveFirstPerson.dll
 cp ../../r6/scripts/ImmersiveFirstPerson/LookAt.reds r6/scripts/ImmersiveFirstPerson/LookAt.reds
 cp "$height_archive" archive/pc/mod/ImmersiveFirstPersonHeight.archive
-zip -r "../Immersive First Person.zip" bin red4ext r6 archive
+if command -v zip >/dev/null 2>&1; then
+    zip -r "../Immersive First Person.zip" bin red4ext r6 archive
+elif [[ -x /c/Windows/System32/tar.exe ]]; then
+    /c/Windows/System32/tar.exe -a -c -f "../Immersive First Person.zip" bin red4ext r6 archive
+else
+    echo "Neither zip nor Windows tar.exe is available" >&2
+    exit 1
+fi
 rm -rf bin red4ext r6 archive
