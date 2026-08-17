@@ -15,8 +15,10 @@ local isDisabledByApi = false
 local weaponCameraBlocked = false
 local weaponCameraClearElapsed = 0.0
 local lastCameraBlockReason = nil
+local playerStateSourceRefreshElapsed = 0.0
 
 local BODY_WEAPON_CLEAR_GRACE = 0.0
+local PLAYER_STATE_SOURCE_REFRESH_INTERVAL = 1.0
 
 local cachedPlayerState = {}
 local cachedCameraContext = {}
@@ -162,6 +164,7 @@ end
 
 local function bindPlayer(player)
     Helpers.AttachPlayer(player)
+    playerStateSourceRefreshElapsed = 0.0
     RuntimeHeight.ResetPlayer()
 end
 
@@ -175,12 +178,26 @@ local function ensurePlayerBound()
     return Helpers.GetPlayer()
 end
 
-local function collectPlayerState()
-    return Helpers.RefreshPlayerState(cachedPlayerState)
+local function collectPlayerState(delta)
+    local state = Helpers.RefreshPlayerState(cachedPlayerState)
+    if not state then
+        return nil
+    end
+
+    playerStateSourceRefreshElapsed = playerStateSourceRefreshElapsed
+        + math.max(tonumber(delta) or 0.0, 0.0)
+    if playerStateSourceRefreshElapsed >= PLAYER_STATE_SOURCE_REFRESH_INTERVAL then
+        playerStateSourceRefreshElapsed = 0.0
+        if Helpers.RefreshPlayerStateSource() then
+            state = Helpers.RefreshPlayerState(cachedPlayerState)
+        end
+    end
+
+    return state
 end
 
 local function buildCameraContext(delta, state)
-    state = state or collectPlayerState()
+    state = state or collectPlayerState(delta)
     if not state then
         return nil
     end
@@ -341,6 +358,13 @@ local function registerPlayerInput(cetVersion)
         registerInputListeners(player)
     end)
 
+    Observe('PlayerPuppet', 'OnTakeControl', function(player)
+        if player:IsReplacer() then
+            return
+        end
+        bindPlayer(player)
+    end)
+
     Observe('PlayerPuppet', 'OnDetach', function(player)
         if player:IsReplacer() then
             return
@@ -449,7 +473,7 @@ function ImmersiveFirstPerson.Init()
         end
 
         local player = ensurePlayerBound()
-        local playerState = isPaused and nil or collectPlayerState()
+        local playerState = isPaused and nil or collectPlayerState(delta)
         if not isPaused and not playerState then
             RuntimeHeight.ResetPlayer()
             CameraCore.Suspend("player state unavailable")

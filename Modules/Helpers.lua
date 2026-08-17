@@ -196,6 +196,35 @@ local function refreshPlayerState(target)
     return target
 end
 
+local function refreshPlayerStateSource()
+    local player = Game.GetPlayer()
+    local definition = session.definition
+    local blackboardSystem = Game.GetBlackboardSystem()
+    if not player or not definition or not blackboardSystem then
+        return false
+    end
+
+    local blackboard = blackboardSystem:GetLocalInstanced(
+        player:GetEntityID(),
+        definition
+    )
+    if not blackboard then
+        return false
+    end
+
+    -- Scripted transitions can replace this local instance without detaching
+    -- the player. Keep ordinary state reads cached, but periodically rebind so
+    -- a readable, frozen handle cannot survive indefinitely.
+    session.player = player
+    session.blackboard = blackboard
+    return true
+end
+
+function Helpers.RefreshPlayerStateSource()
+    local ok, refreshed = pcall(refreshPlayerStateSource)
+    return ok and refreshed == true
+end
+
 function Helpers.RefreshPlayerState(target)
     target = target or {}
     local ok, refreshed = pcall(refreshPlayerState, target)

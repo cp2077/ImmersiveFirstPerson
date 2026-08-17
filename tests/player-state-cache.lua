@@ -28,6 +28,7 @@ local values = {
     Consumable = 0,
 }
 local blackboardFails = false
+local currentBlackboard
 
 local definition = setmetatable({}, {
     __index = function(_, key)
@@ -52,6 +53,7 @@ local blackboard = {
         return { hash = 0ULL }
     end,
 }
+currentBlackboard = blackboard
 
 local player = {
     GetEntityID = function()
@@ -95,7 +97,7 @@ Game = {
         return {
             GetLocalInstanced = function()
                 calls.localBlackboard = calls.localBlackboard + 1
-                return blackboard
+                return currentBlackboard
             end,
         }
     end,
@@ -149,20 +151,38 @@ assert(calls.definitions == 1, "healthy cache should not reacquire definitions")
 assert(Helpers.GetFPP() == "fpp", "FPP component should use the cached player")
 assert(calls.getPlayer == 0, "FPP lookup should not reacquire the player")
 
+local replacementValues = { SceneTier = 1 }
+currentBlackboard = {
+    GetInt = function(_, field)
+        return replacementValues[field] or 0
+    end,
+    GetBool = function()
+        return false
+    end,
+    GetEntityID = function()
+        return { hash = 0ULL }
+    end,
+}
+values.SceneTier = 5
+assert(Helpers.RefreshPlayerStateSource(), "player-state source should refresh at a transition")
+assert(Helpers.RefreshPlayerState(snapshot) == snapshot, "replacement blackboard should refresh")
+assert(snapshot.sceneTier == 1, "replacement blackboard should replace a readable stale tier")
+currentBlackboard = blackboard
+assert(Helpers.RefreshPlayerStateSource(), "player-state source should refresh again")
+
 values.Vehicle = 1
 assert(Helpers.RefreshPlayerState(snapshot) == snapshot, "vehicle state should refresh")
 values.Vehicle = 0
 assert(snapshot.inVehicle, "vehicle blackboard state should mark the player in a vehicle")
-assert(calls.mountedVehicle == 2, "mounted vehicle lookup should be skipped in a known vehicle")
+assert(calls.mountedVehicle == 3, "mounted vehicle lookup should be skipped in a known vehicle")
 
 blackboardFails = true
 assert(Helpers.RefreshPlayerState(snapshot) == nil, "failed batch should be rejected")
 blackboardFails = false
-assert(calls.getPlayer == 0, "failed batch should not retry a stale reference")
 assert(Helpers.GetPlayer() == nil, "cached access should not reacquire a dropped player")
-assert(calls.getPlayer == 0, "dropped cache should wait for explicit root acquisition")
+assert(calls.getPlayer == 2, "only explicit source refreshes should reacquire the player")
 assert(Helpers.AttachPlayer(Game.GetPlayer()), "later root acquisition should recover the player")
 assert(Helpers.GetPlayer() == player, "explicitly recovered player should be cached")
-assert(calls.getPlayer == 1, "later root acquisition should acquire the player once")
+assert(calls.getPlayer == 3, "later root acquisition should acquire the player once")
 
 print("Player-state cache tests passed")
