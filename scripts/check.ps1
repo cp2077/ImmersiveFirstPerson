@@ -99,6 +99,10 @@ if ($modRoot -eq $workspace) {
         if ($LASTEXITCODE -ne 0) {
             throw "Camera eligibility tests failed with exit code $LASTEXITCODE."
         }
+        & $luaJit (Join-Path $workspace 'tests\camera-holster.lua')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Camera holster tests failed with exit code $LASTEXITCODE."
+        }
     } finally {
         Pop-Location
     }
