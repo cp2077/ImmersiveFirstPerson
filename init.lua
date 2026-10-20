@@ -19,6 +19,7 @@ local playerStateSourceRefreshElapsed = 0.0
 
 local BODY_WEAPON_CLEAR_GRACE = 0.0
 local PLAYER_STATE_SOURCE_REFRESH_INTERVAL = 1.0
+local UPPER_BODY_FORCE_EMPTY_HANDS = 5
 
 local cachedPlayerState = {}
 local cachedCameraContext = {}
@@ -144,10 +145,10 @@ local function updateWeaponCameraBlock(hasWeapon, upperBodyState, delta)
         weaponCameraBlocked = true
         weaponCameraClearElapsed = 0.0
     elseif weaponCameraBlocked then
-        if upperBodyState ~= 0 then
-            -- Weapon slots disappear during switch, reload, forced-empty-hands,
-            -- and traversal animations. Keep the armed block until that state
-            -- ends instead of treating the temporary empty slot as a holster.
+        if upperBodyState ~= 0 and upperBodyState ~= UPPER_BODY_FORCE_EMPTY_HANDS then
+            -- Keep the armed block through temporary weapon-slot gaps. Forced
+            -- empty hands can persist throughout scenes and safe zones after
+            -- unequipping, so it must not retain a weapon block.
             weaponCameraClearElapsed = 0.0
         else
             weaponCameraClearElapsed = weaponCameraClearElapsed
@@ -203,7 +204,6 @@ local function buildCameraContext(delta, state)
     end
     local hasWeapon = state.hasWeapon
     local cameraBlockReason = getCameraBlockReason(state)
-    logCameraBlockTransition(cameraBlockReason)
     -- The attachment slot can disappear while the ranged-weapon state machine
     -- still owns the arms/camera. Treat either signal as armed, then keep a short
     -- clear grace for the frame gap at the end of those animations.
@@ -213,6 +213,7 @@ local function buildCameraContext(delta, state)
         state.upperBodyState,
         delta
     )
+    logCameraBlockTransition(cameraBlockReason or (blocksCameraForWeapon and "weapon camera" or nil))
     local commonEligible = isEnabled and cameraBlockReason == nil
     local immersiveEligible = commonEligible
         and Config.inner.immersiveViewEnabled
@@ -237,6 +238,8 @@ end
 
 local function setSessionLoaded(loaded, reason)
     isLoaded = loaded
+    weaponCameraBlocked = false
+    weaponCameraClearElapsed = 0.0
     if loaded then
         isPaused = false
         bindPlayer(Game.GetPlayer())

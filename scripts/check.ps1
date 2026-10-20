@@ -80,7 +80,7 @@ if ($syntaxFailures.Count -gt 0) {
 Write-Host 'LuaJIT syntax check passed.'
 
 if ($modRoot -eq $workspace) {
-    Write-Host 'Configuration and runtime height tests'
+    Write-Host 'Lua regression tests'
     Push-Location $workspace
     try {
         & $luaJit (Join-Path $workspace 'tests\config-height-migration.lua')
@@ -94,6 +94,10 @@ if ($modRoot -eq $workspace) {
         & $luaJit (Join-Path $workspace 'tests\player-state-cache.lua')
         if ($LASTEXITCODE -ne 0) {
             throw "Player-state cache tests failed with exit code $LASTEXITCODE."
+        }
+        & $luaJit (Join-Path $workspace 'tests\camera-eligibility.lua')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Camera eligibility tests failed with exit code $LASTEXITCODE."
         }
     } finally {
         Pop-Location
