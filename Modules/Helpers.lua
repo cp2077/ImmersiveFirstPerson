@@ -74,12 +74,18 @@ function Helpers.IsDebugLoggingEnabled()
     return debugLoggingEnabled
 end
 
-function Helpers.Log(message)
+function Helpers.Log(message, flush)
     if not debugLoggingEnabled then
         return
     end
 
     local text = "[ImmersiveFirstPerson] " .. tostring(message)
+    -- CET exposes no explicit flush; warning-level lifecycle/context checkpoints
+    -- reach the mod's file immediately without flushing routine frame logs.
+    if flush and spdlog and spdlog.warning then
+        spdlog.warning(text)
+        return
+    end
     -- CET release builds flush warnings immediately. Routine diagnostics should
     -- stay at info level so camera-state transitions do not force disk flushes.
     if spdlog and spdlog.info then
