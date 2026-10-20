@@ -23,6 +23,7 @@ local UPPER_BODY_FORCE_EMPTY_HANDS = 5
 
 local cachedPlayerState = {}
 local cachedCameraContext = {}
+local lastSceneContext = {}
 
 local API = {}
 
@@ -127,6 +128,32 @@ local function getHeightSuppressionReason(state)
     return nil
 end
 
+local function logSceneContext(state)
+    if not Helpers.IsDebugLoggingEnabled() then
+        return
+    end
+    if lastSceneContext.sceneTier == state.sceneTier
+        and lastSceneContext.inVehicle == state.inVehicle
+        and lastSceneContext.remoteVehicle == state.remoteVehicle
+        and lastSceneContext.inWorkspot == state.inWorkspot then
+        return
+    end
+
+    lastSceneContext.sceneTier = state.sceneTier
+    lastSceneContext.inVehicle = state.inVehicle
+    lastSceneContext.remoteVehicle = state.remoteVehicle
+    lastSceneContext.inWorkspot = state.inWorkspot
+    local camera = CameraCore.GetDebugState()
+    Helpers.Log(("scene context: tier=%s vehicle=%s remote=%s workspot=%s "
+        .. "camera=%s ownsCamera=%s immersive=%s freelook=%s heightEnabled=%s heightCm=%s"):format(
+        tostring(state.sceneTier), tostring(state.inVehicle),
+        tostring(state.remoteVehicle), tostring(state.inWorkspot),
+        camera.mode, tostring(camera.ownsCamera),
+        tostring(Config.inner.immersiveViewEnabled), tostring(Config.inner.freeLookEnabled),
+        tostring(Config.inner.heightAdjustmentEnabled), tostring(Config.inner.heightAdjustmentAmount)
+    ), true)
+end
+
 local function logCameraBlockTransition(reason)
     if reason == lastCameraBlockReason then
         return
@@ -189,9 +216,10 @@ local function collectPlayerState(delta)
         + math.max(tonumber(delta) or 0.0, 0.0)
     if playerStateSourceRefreshElapsed >= PLAYER_STATE_SOURCE_REFRESH_INTERVAL then
         playerStateSourceRefreshElapsed = 0.0
-        if Helpers.RefreshPlayerStateSource() then
-            state = Helpers.RefreshPlayerState(cachedPlayerState)
+        if not Helpers.RefreshPlayerStateSource() then
+            return nil
         end
+        state = Helpers.RefreshPlayerState(cachedPlayerState)
     end
 
     return state
@@ -237,6 +265,8 @@ local function refreshInputSettings()
 end
 
 local function setSessionLoaded(loaded, reason)
+    lastSceneContext = {}
+    Helpers.Log("session loaded=" .. tostring(loaded) .. " (" .. tostring(reason) .. ")", true)
     isLoaded = loaded
     weaponCameraBlocked = false
     weaponCameraClearElapsed = 0.0
@@ -340,7 +370,7 @@ end
 
 local function registerPlayerInput(cetVersion)
     local function registerInputListeners(player)
-        if not player then
+        if not player or not IsDefined(player) or player:IsReplacer() then
             return
         end
 
@@ -430,6 +460,7 @@ function ImmersiveFirstPerson.Init()
     registerForEvent("onInit", function()
         initialized = true
         Config.InitConfig()
+        Helpers.Log("startup: IFP=" .. ImmersiveFirstPerson.version .. " CET=" .. GetVersion(), true)
         refreshInputSettings()
 
         local cetVersion = tonumber((GetVersion():gsub('^v(%d+)%.(%d+)%.(%d+)(.*)', function(major, minor, patch, wip)
@@ -481,6 +512,9 @@ function ImmersiveFirstPerson.Init()
             RuntimeHeight.ResetPlayer()
             CameraCore.Suspend("player state unavailable")
             return
+        end
+        if playerState then
+            logSceneContext(playerState)
         end
         local heightSuppressionReason
         if isPaused then
@@ -666,10 +700,12 @@ function ImmersiveFirstPerson.Init()
             Config.inner.debugLogging
         )
         tooltipIfHovered(
-            "Controls routine diagnostic logs. Errors are still reported when disabled."
+            "Writes diagnostics to ImmersiveFirstPerson.log in the mod folder. "
+            .. "Enabled by default. Errors are still reported when disabled."
         )
         if changed then
             Config.SaveConfig()
+            lastSceneContext = {}
         end
 
         --[[ Native camera sampling UI is retained for future curve captures.

@@ -49,7 +49,7 @@ fi
 
 cp -r ../../Modules bin/x64/plugins/cyber_engine_tweaks/mods/ImmersiveFirstPerson/
 cp "$native_dll" red4ext/plugins/ImmersiveFirstPerson/ImmersiveFirstPerson.dll
-cp ../../r6/scripts/ImmersiveFirstPerson/LookAt.reds r6/scripts/ImmersiveFirstPerson/LookAt.reds
+cp ../../r6/scripts/ImmersiveFirstPerson/*.reds r6/scripts/ImmersiveFirstPerson/
 cp "$height_archive" archive/pc/mod/ImmersiveFirstPersonHeight.archive
 if command -v zip >/dev/null 2>&1; then
     zip -r "../Immersive First Person.zip" bin red4ext r6 archive

@@ -56,7 +56,7 @@ local function logStatus(value)
         return
     end
     state.lastLoggedStatus = value
-    Helpers.Log("runtime height: " .. value)
+    Helpers.Log("runtime height: " .. value, true)
 end
 
 local function setStatus(value)

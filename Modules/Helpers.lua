@@ -3,6 +3,7 @@ local debugLoggingEnabled = true
 
 local session = {
     player = nil,
+    playerHash = nil,
     blackboard = nil,
     definition = nil,
     workspotSystem = nil,
@@ -12,11 +13,29 @@ local session = {
 
 local function clearSession()
     session.player = nil
+    session.playerHash = nil
     session.blackboard = nil
     session.definition = nil
     session.workspotSystem = nil
     session.transactionSystem = nil
     session.weaponSlot = nil
+end
+
+local function isAlive(object)
+    return object ~= nil and IsDefined(object)
+end
+
+local function sessionIsAlive()
+    if isAlive(session.player)
+        and isAlive(session.blackboard)
+        and isAlive(session.definition)
+        and isAlive(session.workspotSystem)
+        and isAlive(session.transactionSystem) then
+        return true
+    end
+
+    clearSession()
+    return false
 end
 
 local function getFPPComponent(player)
@@ -25,29 +44,39 @@ end
 
 local function attachPlayer(player)
     clearSession()
-    session.player = player
-    if not player then
+    if not isAlive(player) or player:IsReplacer() then
         return false
     end
 
     local definitions = Game.GetAllBlackboardDefs()
     local blackboardSystem = Game.GetBlackboardSystem()
-    session.definition = definitions and definitions.PlayerStateMachine or nil
-    if session.definition and blackboardSystem then
-        session.blackboard = blackboardSystem:GetLocalInstanced(
-            player:GetEntityID(),
-            session.definition
-        )
+    local definition = definitions and definitions.PlayerStateMachine or nil
+    if not isAlive(definition) or not isAlive(blackboardSystem) then
+        return false
     end
-    session.workspotSystem = Game.GetWorkspotSystem()
-    session.transactionSystem = Game.GetTransactionSystem()
+    local entityID = player:GetEntityID()
+    local blackboard = blackboardSystem:GetLocalInstanced(entityID, definition)
+    local workspotSystem = Game.GetWorkspotSystem()
+    local transactionSystem = Game.GetTransactionSystem()
+    if not isAlive(blackboard) or not isAlive(workspotSystem) or not isAlive(transactionSystem) then
+        return false
+    end
+
+    -- Clearing a strong CET wrapper only schedules its release for a later Lua
+    -- GC. Keep persistent caches weak so they cannot delay engine destruction.
+    session.player = ImmersiveFirstPersonRef.Weak(player)
+    session.playerHash = entityID.hash
+    session.blackboard = ImmersiveFirstPersonRef.Weak(blackboard)
+    session.definition = ImmersiveFirstPersonRef.Weak(definition)
+    session.workspotSystem = ImmersiveFirstPersonRef.Weak(workspotSystem)
+    session.transactionSystem = ImmersiveFirstPersonRef.Weak(transactionSystem)
     session.weaponSlot = TweakDBID.new("AttachmentSlots.WeaponRight")
-    return session.blackboard ~= nil
+    return sessionIsAlive()
 end
 
 function Helpers.AttachPlayer(player)
     local ok, attached = pcall(attachPlayer, player)
-    if not ok then
+    if not ok or not attached then
         clearSession()
         return false
     end
@@ -59,6 +88,9 @@ function Helpers.DetachPlayer()
 end
 
 function Helpers.GetPlayer()
+    if not sessionIsAlive() then
+        return nil
+    end
     return session.player
 end
 
@@ -74,12 +106,18 @@ function Helpers.IsDebugLoggingEnabled()
     return debugLoggingEnabled
 end
 
-function Helpers.Log(message)
+function Helpers.Log(message, flush)
     if not debugLoggingEnabled then
         return
     end
 
     local text = "[ImmersiveFirstPerson] " .. tostring(message)
+    -- CET exposes no explicit flush; warning-level lifecycle/context checkpoints
+    -- reach the mod's file immediately without flushing routine frame logs.
+    if flush and spdlog and spdlog.warning then
+        spdlog.warning(text)
+        return
+    end
     -- CET release builds flush warnings immediately. Routine diagnostics should
     -- stay at info level so camera-state transitions do not force disk flushes.
     if spdlog and spdlog.info then
@@ -135,13 +173,12 @@ local function blackboardBool(blackboard, definition, fieldName, fallback)
 end
 
 local function refreshPlayerState(target)
+    if not sessionIsAlive() then
+        return nil
+    end
     local player = session.player
     local blackboard = session.blackboard
     local definition = session.definition
-    if not player or not blackboard or not definition then
-        return nil
-    end
-
     local detailedLocomotion = blackboardInt(blackboard, definition, "LocomotionDetailed", 0)
     local highLevel = blackboardInt(blackboard, definition, "HighLevel", 0)
     local vehicleState = blackboardInt(blackboard, definition, "Vehicle", 0)
@@ -197,32 +234,43 @@ local function refreshPlayerState(target)
 end
 
 local function refreshPlayerStateSource()
+    if not sessionIsAlive() then
+        return false
+    end
     local player = Game.GetPlayer()
     local definition = session.definition
     local blackboardSystem = Game.GetBlackboardSystem()
-    if not player or not definition or not blackboardSystem then
+    if not isAlive(player) or player:IsReplacer() or not isAlive(blackboardSystem) then
+        return false
+    end
+    local entityID = player:GetEntityID()
+    if entityID.hash ~= session.playerHash then
         return false
     end
 
     local blackboard = blackboardSystem:GetLocalInstanced(
-        player:GetEntityID(),
+        entityID,
         definition
     )
-    if not blackboard then
+    if not isAlive(blackboard) then
         return false
     end
 
     -- Scripted transitions can replace this local instance without detaching
     -- the player. Keep ordinary state reads cached, but periodically rebind so
     -- a readable, frozen handle cannot survive indefinitely.
-    session.player = player
-    session.blackboard = blackboard
+    session.player = ImmersiveFirstPersonRef.Weak(player)
+    session.blackboard = ImmersiveFirstPersonRef.Weak(blackboard)
     return true
 end
 
 function Helpers.RefreshPlayerStateSource()
     local ok, refreshed = pcall(refreshPlayerStateSource)
-    return ok and refreshed == true
+    if not ok or not refreshed then
+        clearSession()
+        return false
+    end
+    return true
 end
 
 function Helpers.RefreshPlayerState(target)

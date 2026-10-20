@@ -22,18 +22,25 @@ if (-not (Test-Path -LiteralPath $gameRootFull -PathType Container)) {
     throw "Cyberpunk game root was not found: $gameRootFull"
 }
 
-if (-not $LuaOnly -and -not $DryRun -and (Get-Process -Name 'Cyberpunk2077' -ErrorAction SilentlyContinue)) {
-    throw 'Close Cyberpunk 2077 before a full deployment. The game locks the native DLL.'
+if (-not $LuaOnly -and -not $DryRun) {
+    $targetExecutable = Join-Path $gameRootFull 'bin\x64\Cyberpunk2077.exe'
+    $targetProcess = Get-Process -Name 'Cyberpunk2077' -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -eq $targetExecutable
+    }
+    if ($targetProcess) {
+        throw "Close the target game before a full deployment: $targetExecutable"
+    }
 }
 
 $targetRelative = 'bin\x64\plugins\cyber_engine_tweaks\mods\ImmersiveFirstPerson'
 $targetRoot = [IO.Path]::GetFullPath((Join-Path $gameRootFull $targetRelative)).TrimEnd('\')
 $nativeTarget = [IO.Path]::GetFullPath((Join-Path $gameRootFull 'red4ext\plugins\ImmersiveFirstPerson\ImmersiveFirstPerson.dll'))
 $redscriptTarget = [IO.Path]::GetFullPath((Join-Path $gameRootFull 'r6\scripts\ImmersiveFirstPerson\LookAt.reds'))
+$referencesTarget = [IO.Path]::GetFullPath((Join-Path $gameRootFull 'r6\scripts\ImmersiveFirstPerson\References.reds'))
 $legacyRedscriptTarget = [IO.Path]::GetFullPath((Join-Path $gameRootFull 'r6\scripts\ImmersiveFirstPerson\NativeHeight.reds'))
 $heightArchiveTarget = [IO.Path]::GetFullPath((Join-Path $gameRootFull 'archive\pc\mod\ImmersiveFirstPersonHeight.archive'))
 $gamePrefix = $gameRootFull + '\'
-foreach ($candidate in @($targetRoot + '\', $nativeTarget, $redscriptTarget, $legacyRedscriptTarget, $heightArchiveTarget)) {
+foreach ($candidate in @($targetRoot + '\', $nativeTarget, $redscriptTarget, $referencesTarget, $legacyRedscriptTarget, $heightArchiveTarget)) {
     if (-not $candidate.StartsWith($gamePrefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Unsafe deployment target: $candidate"
     }
@@ -58,9 +65,15 @@ if (-not $SkipValidation) {
 
 $nativeSource = Join-Path $repositoryRoot 'build\native\Release\ImmersiveFirstPerson.dll'
 $redscriptSource = Join-Path $repositoryRoot 'r6\scripts\ImmersiveFirstPerson\LookAt.reds'
+$referencesSource = Join-Path $repositoryRoot 'r6\scripts\ImmersiveFirstPerson\References.reds'
 $heightArchiveSource = Join-Path $repositoryRoot 'optional\ImmersiveFirstPersonHeight.archive'
+$runtimePayloads = @(
+    [pscustomobject]@{ Source = $nativeSource; Destination = $nativeTarget },
+    [pscustomobject]@{ Source = $redscriptSource; Destination = $redscriptTarget },
+    [pscustomobject]@{ Source = $referencesSource; Destination = $referencesTarget }
+)
 if (-not $LuaOnly) {
-    foreach ($required in @($nativeSource, $redscriptSource)) {
+    foreach ($required in $runtimePayloads.Source) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
             throw "A required runtime payload is missing: $required"
         }
@@ -123,6 +136,7 @@ if ($DryRun) {
     if (-not $LuaOnly) {
         Write-Output 'COPY red4ext\plugins\ImmersiveFirstPerson\ImmersiveFirstPerson.dll'
         Write-Output 'COPY r6\scripts\ImmersiveFirstPerson\LookAt.reds'
+        Write-Output 'COPY r6\scripts\ImmersiveFirstPerson\References.reds'
         if (Test-Path -LiteralPath $legacyRedscriptTarget -PathType Leaf) {
             Write-Output 'REMOVE r6\scripts\ImmersiveFirstPerson\NativeHeight.reds'
         }
@@ -157,10 +171,7 @@ foreach ($file in $staleLua) {
 }
 
 if (-not $LuaOnly) {
-    foreach ($payload in @(
-        [pscustomobject]@{ Source = $nativeSource; Destination = $nativeTarget },
-        [pscustomobject]@{ Source = $redscriptSource; Destination = $redscriptTarget }
-    )) {
+    foreach ($payload in $runtimePayloads) {
         $destinationDirectory = Split-Path -Parent $payload.Destination
         if (-not (Test-Path -LiteralPath $destinationDirectory -PathType Container)) {
             New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
@@ -199,10 +210,7 @@ foreach ($entry in $manifest.Values) {
     }
 }
 if (-not $LuaOnly) {
-    foreach ($payload in @(
-        [pscustomobject]@{ Source = $nativeSource; Destination = $nativeTarget },
-        [pscustomobject]@{ Source = $redscriptSource; Destination = $redscriptTarget }
-    )) {
+    foreach ($payload in $runtimePayloads) {
         if (-not (Test-Path -LiteralPath $payload.Destination -PathType Leaf)) {
             $verificationFailures += "$($payload.Destination) is missing"
             continue
