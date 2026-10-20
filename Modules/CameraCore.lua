@@ -20,7 +20,7 @@ local BODY_WEAPON_FADE_IN_DURATION = 0.15
 -- useful ownership test because the weapon camera can replace it with the same
 -- value. Apply an imperceptible but distinguishable local pitch, require it to
 -- survive twice, then continue verifying every visible fade frame. Otherwise the
--- 250 ms holster fade can elapse behind the weapon camera and appear as one jump.
+-- holster fade can elapse behind the weapon camera and appear as one jump.
 local BODY_HOLSTER_PROBE_PITCH = -0.10
 local BODY_HOLSTER_PROBE_STABLE_FRAMES = 2
 local BODY_HOLSTER_PROBE_POSITION_TOLERANCE = 0.0005
@@ -165,6 +165,19 @@ local function quaternionCopy(value)
         k = value.k,
         r = value.r,
     }
+end
+
+local function quaternionAlignment(a, b)
+    local dot = a.i * b.i + a.j * b.j + a.k * b.k + a.r * b.r
+    local lengthSquaredA = a.i * a.i + a.j * a.j + a.k * a.k + a.r * a.r
+    local lengthSquaredB = b.i * b.i + b.j * b.j + b.k * b.k + b.r * b.r
+    if lengthSquaredA <= 0.0 or lengthSquaredB <= 0.0 then
+        return 0.0
+    end
+
+    -- Native quaternion products have small length errors. A raw dot can then
+    -- reject the very rotation we wrote and bake our correction into the baseline.
+    return clamp(math.abs(dot) / math.sqrt(lengthSquaredA * lengthSquaredB), 0.0, 1.0)
 end
 
 local function copyVectorInto(target, value)
@@ -611,13 +624,20 @@ local function resetBodyBlendTracking()
     runtime.bodyTransition.probeRejectedWrites = 0
 end
 
-local function rebaseBodyProbeToLiveCamera(fpp, position, orientation)
+local function rebaseBodyProbeToLiveCamera(fpp, position, orientation, positionRetained, orientationRetained)
     if not runtime.ownsCamera or not runtime.baseline then
         return
     end
 
-    runtime.baseline.position = vectorCopy(position)
-    runtime.baseline.orientation = quaternionCopy(orientation)
+    -- Camera profiles can replace translation without replacing rotation, or
+    -- vice versa. A retained channel still contains our probe/fade correction;
+    -- adopting it as native would bake that correction into every later pose.
+    if not positionRetained then
+        runtime.baseline.position = vectorCopy(position)
+    end
+    if not orientationRetained then
+        runtime.baseline.orientation = quaternionCopy(orientation)
+    end
     runtime.baseline.fov = Helpers.GetFOV(fpp) or runtime.baseline.fov
     runtime.lastApplied = nil
 end
@@ -678,29 +698,26 @@ local function updateBodyBlend(fpp, context, delta)
             local positionDelta = math.abs(position.x - appliedPosition.x)
                 + math.abs(position.y - appliedPosition.y)
                 + math.abs(position.z - appliedPosition.z)
-            local appliedOrientation = runtime.lastApplied.orientation
-            local retainedDot = math.abs(
-                orientation.i * appliedOrientation.i
-                    + orientation.j * appliedOrientation.j
-                    + orientation.k * appliedOrientation.k
-                    + orientation.r * appliedOrientation.r
-            )
-            if positionDelta <= BODY_HOLSTER_PROBE_POSITION_TOLERANCE
-                and retainedDot >= BODY_HOLSTER_PROBE_ORIENTATION_DOT then
+            local retainedDot = quaternionAlignment(orientation, runtime.lastApplied.orientation)
+            local positionRetained = positionDelta <= BODY_HOLSTER_PROBE_POSITION_TOLERANCE
+            local orientationRetained = retainedDot >= BODY_HOLSTER_PROBE_ORIENTATION_DOT
+            if positionRetained and orientationRetained then
                 fadeInWriteRetained = true
                 if transition.waitingForCamera then
                     transition.probeStableFrames = transition.probeStableFrames + 1
                 end
             else
                 -- The outgoing profile replaced either the fixed probe or a
-                -- visible fade step. Adopt that live native pose, return to the
-                -- tiny probe, and restart the complete fade only after it sticks.
+                -- visible fade step. Adopt only the overwritten channels, return
+                -- to the tiny probe, and restart the fade only after it sticks.
                 transition.probeRejectedWrites = transition.probeRejectedWrites + 1
                 transition.waitingForCamera = true
                 transition.probeStableFrames = 0
                 transition.elapsed = 0.0
                 runtime.bodyBlend = transition.from
-                rebaseBodyProbeToLiveCamera(fpp, position, orientation)
+                rebaseBodyProbeToLiveCamera(
+                    fpp, position, orientation, positionRetained, orientationRetained
+                )
             end
         end
         transition.probeWritten = false
@@ -714,8 +731,8 @@ local function updateBodyBlend(fpp, context, delta)
             transition.elapsed = 0.0
             Helpers.Log((
                 "body holster camera ownership confirmed after %d overwritten writes; "
-                    .. "250 ms fade started"
-            ):format(transition.probeRejectedWrites))
+                    .. "%.0f ms fade started"
+            ):format(transition.probeRejectedWrites, BODY_WEAPON_FADE_IN_DURATION * 1000.0))
         else
             if transition.probeElapsed >= BODY_HOLSTER_PROBE_LOG_DELAY
                 and not transition.probeWaitLogged then
@@ -1220,10 +1237,6 @@ local function updateReturn(delta)
     end
 end
 
-local function quaternionDot(a, b)
-    return a.i * b.i + a.j * b.j + a.k * b.k + a.r * b.r
-end
-
 local function detectCompetingWriter(actualPosition, actualOrientation)
     -- Diagnostic only. CET can return fresh Lua wrappers for one native object,
     -- while REDengine legitimately
@@ -1238,7 +1251,7 @@ local function detectCompetingWriter(actualPosition, actualOrientation)
     local positionDelta = math.abs(actualPosition.x - runtime.lastApplied.position.x)
         + math.abs(actualPosition.y - runtime.lastApplied.position.y)
         + math.abs(actualPosition.z - runtime.lastApplied.position.z)
-    local orientationDot = math.abs(quaternionDot(actualOrientation, runtime.lastApplied.orientation))
+    local orientationDot = quaternionAlignment(actualOrientation, runtime.lastApplied.orientation)
     local disturbed = positionDelta > 0.002 or orientationDot < 0.9995
 
     if runtime.mode == MODE.FREELOOK
@@ -1312,10 +1325,10 @@ local function composeAndWrite(
     if runtime.mode == MODE.FREELOOK
         and runtime.entryNativeOrientation
         and not runtime.freeLookParentOrientationDriftLogged then
-        local parentDot = clamp(math.abs(quaternionDot(
+        local parentDot = quaternionAlignment(
             nativeOrientation,
             runtime.entryNativeOrientation
-        )), 0.0, 1.0)
+        )
         local parentAngle = math.deg(2.0 * math.acos(parentDot))
         if parentAngle > 0.25 then
             runtime.freeLookParentOrientationDriftLogged = true
