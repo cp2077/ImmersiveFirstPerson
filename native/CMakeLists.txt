@@ -16,7 +16,7 @@ set(RED4EXT_INSTALL OFF CACHE BOOL "" FORCE)
 set(RED4EXT_USE_PCH OFF CACHE BOOL "" FORCE)
 add_subdirectory("${RED4EXT_SDK_PATH}" "${CMAKE_BINARY_DIR}/red4ext-sdk" EXCLUDE_FROM_ALL)
 
-add_library(ImmersiveFirstPerson SHARED src/Main.cpp)
+add_library(ImmersiveFirstPerson SHARED src/Main.cpp src/InteractionHeight.cpp)
 target_link_libraries(ImmersiveFirstPerson PRIVATE RED4ext::SDK)
 target_compile_definitions(ImmersiveFirstPerson PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 
