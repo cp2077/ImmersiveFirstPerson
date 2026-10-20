@@ -163,6 +163,7 @@ jobs:
               "${archive_root}init.lua"|"${archive_root}Modules/"*.lua|\
               "red4ext/plugins/ImmersiveFirstPerson/ImmersiveFirstPerson.dll"|\
               "r6/scripts/ImmersiveFirstPerson/LookAt.reds"|\
+              "r6/scripts/ImmersiveFirstPerson/References.reds"|\
               "archive/pc/mod/ImmersiveFirstPersonHeight.archive") ;;
               *) echo "Unexpected archive entry: $entry" >&2; exit 1 ;;
             esac
