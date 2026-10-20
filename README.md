@@ -10,7 +10,9 @@ Body correction runs while looking down during ordinary gameplay and yields to v
 
 The bundled height override replaces `player_base.animgraph` with a versioned two-branch blend. Its endpoints shorten or lengthen V's legs by 50 cm while moving the COG by the same amount and keeping the Root-space foot targets grounded. The midpoint is the exact vanilla pose. CET drives the blend over 100 ms, so the setting can change at runtime without moving `gameFPPCameraComponent`, changing camera pitch, or restarting the game.
 
-Height remains active during ordinary roaming, combat, ADS, scanner use, dialogue, and swimming. It smoothly returns to vanilla for any vehicle occupancy, workspots, scripted scenes, ladders/climbing/vaulting, takedowns/grapples, body carrying, knockdowns, and other forced-contact states. Negative values and values above +14 cm are deliberately marked experimental; values above +30 cm are extremely unstable.
+Height remains active during ordinary roaming, combat, ADS, scanner use, dialogue, and swimming. It smoothly returns to vanilla for any vehicle occupancy, workspots, camera-controlled scenes, ladders/climbing/vaulting, takedowns/grapples, body carrying, knockdowns, and other forced-contact states. Negative values and values above +14 cm are deliberately marked experimental; values above +30 cm are extremely unstable.
+
+Camera-based interaction volumes use V's unmodified view height, so changing height does not move that reference point out of an authored dialogue or object volume. The displayed camera and aiming retain the chosen height. If the native interaction compatibility check fails, height adjustment is unavailable and the rest of the mod continues normally.
 
 The mod verifies the exact loaded animgraph contract. If the bundled archive is absent, incompatible, or overridden by another mod, the height slider is unavailable and the rest of Immersive First Person continues normally.
 

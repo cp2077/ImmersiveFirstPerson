@@ -7,6 +7,8 @@
 #include <RED4ext/Scripting/Natives/Generated/ent/AnimatedComponent.hpp>
 #include <RED4ext/Scripting/Natives/Generated/game/Puppet.hpp>
 
+#include "InteractionHeight.hpp"
+
 #include <cstdint>
 #include <string>
 
@@ -21,6 +23,7 @@ enum class HeightGraphStatus : int32_t
     Compatible = 1,
     IncompatibleContract = 2,
     MissingOrOverridden = 3,
+    InteractionUnavailable = 4,
 };
 
 RED4ext::v1::PluginHandle s_pluginHandle;
@@ -139,7 +142,8 @@ void GetHeightGraphStatus(RED4ext::IScriptable* aContext, RED4ext::CStackFrame* 
     aFrame->code++;
     if (aOut)
     {
-        *aOut = static_cast<int32_t>(InspectHeightGraph(GetEntity(aContext)));
+        *aOut = static_cast<int32_t>(InteractionHeight::IsAvailable()
+            ? InspectHeightGraph(GetEntity(aContext)) : HeightGraphStatus::InteractionUnavailable);
     }
 }
 
@@ -176,6 +180,7 @@ RED4EXT_C_EXPORT void RED4EXT_CALL PostRegisterTypes()
         puppetClass->RegisterFunction(function);
     }
 
+    InteractionHeight::RegisterFunctions(puppetClass);
     LogInfo("Runtime height contract control registered.");
 }
 
@@ -188,11 +193,13 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle,
     case RED4ext::v1::EMainReason::Load:
         s_pluginHandle = aHandle;
         s_logger = aSdk->logger;
+        InteractionHeight::Install(aHandle, aSdk);
         RED4ext::CRTTISystem::Get()->AddRegisterCallback(RegisterTypes);
         RED4ext::CRTTISystem::Get()->AddPostRegisterCallback(PostRegisterTypes);
         LogInfo("Immersive First Person native plugin loaded.");
         break;
     case RED4ext::v1::EMainReason::Unload:
+        InteractionHeight::Uninstall(aHandle, aSdk);
         break;
     }
     return true;

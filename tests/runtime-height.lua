@@ -23,6 +23,13 @@ CName = {
 }
 
 local lookAtWrites = {}
+local interactionOffsets = {}
+local interactionResets = 0
+Game = {
+    ImmersiveFirstPersonResetInteractionHeight = function()
+        interactionResets = interactionResets + 1
+    end,
+}
 local function playerWrapper(entityHash, graphStatus)
     return {
         GetEntityID = function()
@@ -35,6 +42,9 @@ local function playerWrapper(entityHash, graphStatus)
         ImmersiveFirstPersonSetHeadLookAtEnabled = function(_, enabled)
             lookAtWrites[#lookAtWrites + 1] = enabled
             return true
+        end,
+        ImmersiveFirstPersonSetInteractionHeight = function(_, offset)
+            interactionOffsets[#interactionOffsets + 1] = offset
         end,
     }
 end
@@ -59,6 +69,7 @@ for _ = 1, 10 do
 end
 near(RuntimeHeight.GetEffectiveHeightCentimeters(), 50, 0.001, "same-player wrapper transition")
 near(writes[#writes].value, 1, 0.0001, "maximum graph input")
+near(interactionOffsets[#interactionOffsets], 0.5, 0.0001, "maximum interaction compensation")
 assert(RuntimeHeight.IsAvailable(), "compatible graph should be available")
 assert(not RuntimeHeight.IsCompatibilityPending(), "compatible graph should not be pending")
 assert(graphInspections == 1, "resolved graph contract should stop polling")
@@ -70,6 +81,7 @@ RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 50, nil)
 assert(graphInspections == 1, "settings changes should not recheck a resolved graph")
 
 RuntimeHeight.ResetPlayer()
+assert(interactionResets > 0, "player reset must clear interaction compensation")
 assert(RuntimeHeight.IsCompatibilityPending(), "new player should reset graph compatibility")
 RuntimeHeight.Update(0.016, playerWrapper(43, 1), true, true, 50, nil)
 assert(graphInspections == 2, "new player should receive a fresh graph check")
@@ -80,6 +92,7 @@ for _ = 1, 10 do
 end
 near(RuntimeHeight.GetEffectiveHeightCentimeters(), 0, 0.001, "suppressed height")
 near(writes[#writes].value, 0.5, 0.0001, "suppressed graph input")
+near(interactionOffsets[#interactionOffsets], 0, 0.0001, "suppressed interaction compensation")
 
 for _ = 1, 10 do
     RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 50, nil)
@@ -92,6 +105,7 @@ end
 near(RuntimeHeight.GetEffectiveHeightCentimeters(), -50, 0.001, "minimum height")
 near(RuntimeHeight.GetEstimatedHeightCentimeters(), 121, 0.001, "estimated minimum height")
 near(writes[#writes].value, 0, 0.0001, "minimum graph input")
+near(interactionOffsets[#interactionOffsets], -0.5, 0.0001, "minimum interaction compensation")
 
 -- Look-at redirection follows immersive view while the graph height has its
 -- own switch; neither feature should implicitly disable the other.
@@ -110,7 +124,22 @@ assert(lookAtWrites[#lookAtWrites] == false, "immersive toggle should disable lo
 
 RuntimeHeight.Shutdown(playerWrapper(42, 1))
 near(writes[#writes].value, 0.5, 0.0001, "shutdown graph input")
+near(interactionOffsets[#interactionOffsets], 0, 0.0001, "shutdown interaction compensation")
 assert(lookAtWrites[#lookAtWrites] == false, "shutdown should disable look-at redirection")
 assert(graphInspections == 2, "settings and transitions should not recheck a resolved graph")
+
+RuntimeHeight.ResetPlayer()
+local writesBeforeIncompatible = #writes
+RuntimeHeight.Update(0.2, playerWrapper(44, 4), true, true, 8, nil)
+assert(not RuntimeHeight.IsAvailable(), "incompatible interaction evaluator must disable height")
+assert(#writes == writesBeforeIncompatible, "incompatible interaction evaluator must not raise the player")
+
+RuntimeHeight.ResetPlayer()
+local oldPluginPlayer = playerWrapper(45, 1)
+oldPluginPlayer.ImmersiveFirstPersonSetInteractionHeight = nil
+RuntimeHeight.Update(0.2, oldPluginPlayer, true, true, 8, nil)
+assert(not RuntimeHeight.IsAvailable(), "old native plugin must fail closed")
+assert(#writes == writesBeforeIncompatible, "missing compensation control must not publish height")
+near(RuntimeHeight.GetEffectiveHeightCentimeters(), 0, 0.001, "failed controls leave neutral height")
 
 print(("RuntimeHeight tests passed (%d graph writes, %d log messages)"):format(#writes, #logs))

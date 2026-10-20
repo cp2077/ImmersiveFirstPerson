@@ -17,6 +17,7 @@ local GRAPH_STATUS = {
     COMPATIBLE = 1,
     INCOMPATIBLE = 2,
     MISSING_OR_OVERRIDDEN = 3,
+    INTERACTION_UNAVAILABLE = 4,
 }
 
 local state = {
@@ -85,6 +86,8 @@ local function inspectGraph(player)
         setStatus("height graph is incompatible")
     elseif state.graphStatus == GRAPH_STATUS.MISSING_OR_OVERRIDDEN then
         setStatus("height archive missing or overridden")
+    elseif state.graphStatus == GRAPH_STATUS.INTERACTION_UNAVAILABLE then
+        setStatus("interaction height compatibility check failed")
     else
         setStatus("waiting for player animation graph")
     end
@@ -112,7 +115,14 @@ local function configureLookAt(player, enabled)
 end
 
 local function setBlendInput(player, name, value)
+    player:ImmersiveFirstPersonSetInteractionHeight(
+        (MINIMUM_HEIGHT_CM + value * HEIGHT_RANGE_CM) / 100.0
+    )
     AnimationControllerComponent.SetInputFloat(player, name, value)
+end
+
+local function resetInteractionHeight()
+    Game.ImmersiveFirstPersonResetInteractionHeight()
 end
 
 local function sendBlend(player, value, force)
@@ -124,9 +134,14 @@ local function sendBlend(player, value, force)
 
     local ok = pcall(setBlendInput, player, getInputName(), value)
     if not ok then
-        setStatus("height graph input could not be written")
+        pcall(resetInteractionHeight)
+        setStatus("height controls could not be written")
         state.graphStatus = GRAPH_STATUS.WAITING
         state.pollElapsed = CONTRACT_POLL_INTERVAL
+        state.currentBlend = NEUTRAL_BLEND
+        state.startBlend = NEUTRAL_BLEND
+        state.targetBlend = NEUTRAL_BLEND
+        state.transitionElapsed = TRANSITION_DURATION
         state.lastSentBlend = nil
         return false
     end
@@ -168,6 +183,7 @@ local function updateTransition(delta, player)
 end
 
 function RuntimeHeight.ResetPlayer()
+    pcall(resetInteractionHeight)
     state.nativeAvailable = nil
     state.graphStatus = GRAPH_STATUS.WAITING
     state.currentBlend = NEUTRAL_BLEND
@@ -262,6 +278,7 @@ function RuntimeHeight.Shutdown(player)
     if player then
         pcall(setLookAtEnabled, player, false)
     end
+    pcall(resetInteractionHeight)
     state.currentBlend = NEUTRAL_BLEND
     state.targetBlend = NEUTRAL_BLEND
     state.lastSentBlend = nil
