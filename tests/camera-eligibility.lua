@@ -1,7 +1,10 @@
 local events = {}
 local lifecycle = {}
 local lastContext
-local player = { RegisterInputListener = function() end }
+local player = {
+    RegisterInputListener = function() end,
+    IsReplacer = function() return false end,
+}
 local state = {
     sceneTier = 1,
     vitalsState = 0,
@@ -45,6 +48,7 @@ local modules = {
         end,
         IsXInverted = function() return false end,
         IsYInverted = function() return false end,
+        IsDebugLoggingEnabled = function() return false end,
         Log = noop,
     },
     ["Modules/GameSession"] = session,
@@ -64,6 +68,7 @@ local modules = {
 local environment = setmetatable({
     require = function(name) return assert(modules[name], name) end,
     Game = { GetPlayer = function() return player end },
+    IsDefined = function(value) return value ~= nil end,
     GetVersion = function() return "v1.37.1" end,
     Observe = noop,
     registerForEvent = function(name, callback) events[name] = callback end,
