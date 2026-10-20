@@ -215,9 +215,10 @@ local function collectPlayerState(delta)
         + math.max(tonumber(delta) or 0.0, 0.0)
     if playerStateSourceRefreshElapsed >= PLAYER_STATE_SOURCE_REFRESH_INTERVAL then
         playerStateSourceRefreshElapsed = 0.0
-        if Helpers.RefreshPlayerStateSource() then
-            state = Helpers.RefreshPlayerState(cachedPlayerState)
+        if not Helpers.RefreshPlayerStateSource() then
+            return nil
         end
+        state = Helpers.RefreshPlayerState(cachedPlayerState)
     end
 
     return state
@@ -366,7 +367,7 @@ end
 
 local function registerPlayerInput(cetVersion)
     local function registerInputListeners(player)
-        if not player then
+        if not player or not IsDefined(player) or player:IsReplacer() then
             return
         end
 

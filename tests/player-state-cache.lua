@@ -30,6 +30,35 @@ local values = {
 local blackboardFails = false
 local currentBlackboard
 
+-- Model CET's non-owning wrapper with a Lua weak-value table. This lets GC
+-- assertions detect accidental strong ownership in the session cache.
+ImmersiveFirstPersonRef = {
+    Weak = function(object)
+        if object == nil then
+            return nil
+        end
+        local target = setmetatable({ object }, { __mode = "v" })
+        return setmetatable({}, {
+            target = target,
+            __index = function(_, key)
+                assert(target[1], "expired weak handle was dereferenced")
+                return target[1][key]
+            end,
+        })
+    end,
+}
+
+IsDefined = function(object)
+    if object == nil then
+        return false
+    end
+    local metadata = getmetatable(object)
+    if metadata and metadata.target then
+        object = metadata.target[1]
+    end
+    return object ~= nil and rawget(object, "expired") ~= true
+end
+
 local definition = setmetatable({}, {
     __index = function(_, key)
         return key
@@ -56,6 +85,9 @@ local blackboard = {
 currentBlackboard = blackboard
 
 local player = {
+    IsReplacer = function()
+        return false
+    end,
     GetEntityID = function()
         calls.entityID = calls.entityID + 1
         return { hash = 42ULL }
@@ -83,14 +115,19 @@ local transactionSystem = {
     end,
 }
 
+local currentPlayer = player
+local currentDefinition = definition
+local currentWorkspotSystem = workspotSystem
+local currentTransactionSystem = transactionSystem
+
 Game = {
     GetPlayer = function()
         calls.getPlayer = calls.getPlayer + 1
-        return player
+        return currentPlayer
     end,
     GetAllBlackboardDefs = function()
         calls.definitions = calls.definitions + 1
-        return { PlayerStateMachine = definition }
+        return { PlayerStateMachine = currentDefinition }
     end,
     GetBlackboardSystem = function()
         calls.blackboardSystem = calls.blackboardSystem + 1
@@ -103,11 +140,11 @@ Game = {
     end,
     GetWorkspotSystem = function()
         calls.workspotSystem = calls.workspotSystem + 1
-        return workspotSystem
+        return currentWorkspotSystem
     end,
     GetTransactionSystem = function()
         calls.transactionSystem = calls.transactionSystem + 1
-        return transactionSystem
+        return currentTransactionSystem
     end,
     ['GetMountedVehicle;GameObject'] = function()
         calls.mountedVehicle = calls.mountedVehicle + 1
@@ -182,7 +219,72 @@ blackboardFails = false
 assert(Helpers.GetPlayer() == nil, "cached access should not reacquire a dropped player")
 assert(calls.getPlayer == 2, "only explicit source refreshes should reacquire the player")
 assert(Helpers.AttachPlayer(Game.GetPlayer()), "later root acquisition should recover the player")
-assert(Helpers.GetPlayer() == player, "explicitly recovered player should be cached")
+assert(Helpers.GetPlayer():GetEntityID().hash == 42ULL, "explicitly recovered player should be cached")
 assert(calls.getPlayer == 3, "later root acquisition should acquire the player once")
+
+for _, object in ipairs({ player, blackboard, definition, workspotSystem, transactionSystem }) do
+    assert(Helpers.AttachPlayer(player), "valid session should attach before expiry")
+    object.expired = true
+    assert(Helpers.RefreshPlayerState(snapshot) == nil, "expired session handle must block state reads")
+    assert(Helpers.GetPlayer() == nil, "expired session handle must invalidate the whole cache")
+    object.expired = nil
+end
+
+local replacer = setmetatable({ IsReplacer = function() return true end }, { __index = player })
+assert(not Helpers.AttachPlayer(replacer), "replacer puppets must not enter the cache")
+assert(Helpers.GetPlayer() == nil, "rejected replacer must not leave a partial cache")
+assert(Helpers.AttachPlayer(player), "normal player should bind after a replacer")
+currentPlayer = replacer
+assert(not Helpers.RefreshPlayerStateSource(), "refresh must reject a controlled replacer")
+assert(Helpers.GetPlayer() == nil, "replacer refresh must drop the previous player")
+currentPlayer = player
+
+assert(Helpers.AttachPlayer(player), "normal player should rebind")
+currentPlayer = setmetatable({
+    GetEntityID = function() return { hash = 43ULL } end,
+}, { __index = player })
+assert(not Helpers.RefreshPlayerStateSource(), "a different player must require a full rebind")
+assert(Helpers.GetPlayer() == nil, "player replacement must invalidate dependent handles")
+currentPlayer = player
+
+currentWorkspotSystem = nil
+assert(not Helpers.AttachPlayer(player), "missing session objects must reject attachment")
+assert(Helpers.GetPlayer() == nil, "failed attachment must not retain partial state")
+currentWorkspotSystem = workspotSystem
+
+local bridge = ImmersiveFirstPersonRef
+ImmersiveFirstPersonRef = nil
+assert(not Helpers.AttachPlayer(player), "missing weak-reference bridge must fail closed")
+assert(Helpers.GetPlayer() == nil, "missing bridge must not fall back to strong ownership")
+ImmersiveFirstPersonRef = bridge
+
+local released
+do
+    local temporaryPlayer = setmetatable({}, { __index = player })
+    local temporaryBlackboard = setmetatable({}, { __index = blackboard })
+    local temporaryDefinition = setmetatable({}, getmetatable(definition))
+    local temporaryWorkspot = setmetatable({}, { __index = workspotSystem })
+    local temporaryTransaction = setmetatable({}, { __index = transactionSystem })
+    released = setmetatable({
+        temporaryPlayer, temporaryBlackboard, temporaryDefinition,
+        temporaryWorkspot, temporaryTransaction,
+    }, { __mode = "v" })
+    currentPlayer = temporaryPlayer
+    currentBlackboard = temporaryBlackboard
+    currentDefinition = temporaryDefinition
+    currentWorkspotSystem = temporaryWorkspot
+    currentTransactionSystem = temporaryTransaction
+    assert(Helpers.AttachPlayer(temporaryPlayer), "temporary session should bind")
+end
+currentPlayer = nil
+currentBlackboard = nil
+currentDefinition = nil
+currentWorkspotSystem = nil
+currentTransactionSystem = nil
+collectgarbage("collect")
+for index = 1, 5 do
+    assert(released[index] == nil, "cache must not own any of its five engine objects")
+end
+assert(Helpers.GetPlayer() == nil, "released player must be rejected without dereferencing it")
 
 print("Player-state cache tests passed")
