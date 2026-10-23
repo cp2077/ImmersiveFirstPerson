@@ -210,7 +210,7 @@ RED4EXT_C_EXPORT void RED4EXT_CALL Query(RED4ext::v1::PluginInfo* aInfo)
     aInfo->name = L"Immersive First Person";
     aInfo->author = L"Immersive First Person contributors";
     aInfo->version = RED4EXT_V1_SEMVER(0, 2, 0);
-    aInfo->runtime = RED4EXT_V1_RUNTIME_VERSION_2_31;
+    aInfo->runtime = RED4EXT_V1_RUNTIME_VERSION_2_50;
     aInfo->sdk = RED4EXT_V1_SDK_VERSION_CURRENT;
 }
 

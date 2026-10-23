@@ -2,6 +2,9 @@
 
 #include <RED4ext/Scripting/Natives/Generated/game/interactions/ContainedInShapesPredicate.hpp>
 
+#include <RED4ext/Relocation.hpp>
+
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -10,8 +13,9 @@
 
 namespace
 {
-// Cyberpunk 2077 2.31: ContainedInShapesPredicate's camera/entity position selector.
-constexpr uintptr_t kEvaluateOffset = 0x212D14;
+// ContainedInShapesPredicate's camera/entity position selector, resolved through the address library
+// (game 2.5: RVA 0x3C22AC; 2.31: 0x212D14). The body is identical apart from the call displacements.
+constexpr uint32_t kEvaluateHash = 3228120343;
 using Evaluate = bool (*)(RED4ext::game::interactions::ContainedInShapesPredicate*, const void*, void*, void*);
 Evaluate s_evaluate = nullptr;
 void* s_target = nullptr;
@@ -102,7 +106,7 @@ void ResetOffset(RED4ext::IScriptable*, RED4ext::CStackFrame* aFrame, void*, int
 
 bool InteractionHeight::Install(RED4ext::v1::PluginHandle aHandle, const RED4ext::v1::Sdk* aSdk)
 {
-    s_target = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr)) + kEvaluateOffset;
+    s_target = reinterpret_cast<void*>(RED4ext::UniversalRelocBase::Resolve(kEvaluateHash));
     // Check the entire selector before relying on its input layout or replacing it.
     constexpr uint8_t expected[] = {
         0x48,0x83,0xec,0x38,0x8a,0x41,0x30,0x4d,0x8b,0xd8,0xf6,0xd8,0x48,0x8d,0x4c,0x24,0x20,
@@ -112,7 +116,20 @@ bool InteractionHeight::Install(RED4ext::v1::PluginHandle aHandle, const RED4ext
         0xfc,0xff,0x4c,0x8d,0x44,0x24,0x20,0x49,0x8b,0xd1,0x49,0x8b,0xcb,0xe8,0x06,0x00,0x00,
         0x00,0x48,0x83,0xc4,0x38,0xc3
     };
-    if (std::memcmp(s_target, expected, sizeof(expected)) != 0)
+    // The rel32 displacements of the three calls to the float copy helper differ between game versions.
+    constexpr size_t callDisplacements[] = {32, 49, 66};
+    bool matches = true;
+    for (size_t i = 0; i < sizeof(expected); ++i)
+    {
+        const bool isDisplacement = std::any_of(std::begin(callDisplacements), std::end(callDisplacements),
+                                                [i](size_t aStart) { return i >= aStart && i < aStart + 4; });
+        if (!isDisplacement && static_cast<const uint8_t*>(s_target)[i] != expected[i])
+        {
+            matches = false;
+            break;
+        }
+    }
+    if (!matches)
     {
         aSdk->logger->Warn(aHandle, "Interaction height selector is incompatible; height adjustment disabled.");
         return false;
