@@ -1,6 +1,10 @@
 local Helpers = {}
 local debugLoggingEnabled = true
 
+function Helpers.IsValidModName(modName)
+    return type(modName) == "string" and modName:find("%S") ~= nil
+end
+
 local session = {
     player = nil,
     playerHash = nil,

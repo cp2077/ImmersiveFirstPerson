@@ -59,53 +59,51 @@ local RuntimeHeight = require("Modules/RuntimeHeight")
 
 assert(RuntimeHeight.IsCompatibilityPending(), "graph check should begin pending")
 near(RuntimeHeight.GetEffectiveHeightCentimeters(), 0, 0.001, "initial neutral height")
-near(RuntimeHeight.GetMinimumHeightCentimeters(), -50, 0.001, "minimum height")
-near(RuntimeHeight.GetMaximumHeightCentimeters(), 50, 0.001, "maximum height")
 
 -- CET may return a fresh Lua wrapper for the same native player every call.
 -- The transition must still finish instead of restarting from zero.
 for _ = 1, 10 do
-    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 50, nil)
+    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 200, nil)
 end
-near(RuntimeHeight.GetEffectiveHeightCentimeters(), 50, 0.001, "same-player wrapper transition")
+near(RuntimeHeight.GetEffectiveHeightCentimeters(), 200, 0.001, "same-player wrapper transition")
 near(writes[#writes].value, 1, 0.0001, "maximum graph input")
-near(interactionOffsets[#interactionOffsets], 0.5, 0.0001, "maximum interaction compensation")
+near(interactionOffsets[#interactionOffsets], 2.0, 0.0001, "maximum interaction compensation")
 assert(RuntimeHeight.IsAvailable(), "compatible graph should be available")
 assert(not RuntimeHeight.IsCompatibilityPending(), "compatible graph should not be pending")
 assert(graphInspections == 1, "resolved graph contract should stop polling")
 assert(inputNamesCreated == 1, "height input name should be cached")
-near(RuntimeHeight.GetEstimatedHeightCentimeters(), 221, 0.001, "estimated maximum height")
+near(RuntimeHeight.GetEstimatedHeightCentimeters(), 371, 0.001, "estimated maximum height")
 
 RuntimeHeight.MarkDirty()
-RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 50, nil)
+RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 200, nil)
 assert(graphInspections == 1, "settings changes should not recheck a resolved graph")
 
 RuntimeHeight.ResetPlayer()
 assert(interactionResets > 0, "player reset must clear interaction compensation")
 assert(RuntimeHeight.IsCompatibilityPending(), "new player should reset graph compatibility")
-RuntimeHeight.Update(0.016, playerWrapper(43, 1), true, true, 50, nil)
+RuntimeHeight.Update(0.016, playerWrapper(43, 1), true, true, 200, nil)
 assert(graphInspections == 2, "new player should receive a fresh graph check")
 
 -- Suppression and restoration each complete through the same 100 ms blend.
 for _ = 1, 10 do
-    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 50, "vehicle occupancy")
+    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 200, "vehicle occupancy")
 end
 near(RuntimeHeight.GetEffectiveHeightCentimeters(), 0, 0.001, "suppressed height")
-near(writes[#writes].value, 0.5, 0.0001, "suppressed graph input")
+near(writes[#writes].value, 1 / 3, 0.0001, "suppressed graph input")
 near(interactionOffsets[#interactionOffsets], 0, 0.0001, "suppressed interaction compensation")
 
 for _ = 1, 10 do
-    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 50, nil)
+    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, 200, nil)
 end
-near(RuntimeHeight.GetEffectiveHeightCentimeters(), 50, 0.001, "restored height")
+near(RuntimeHeight.GetEffectiveHeightCentimeters(), 200, 0.001, "restored height")
 
 for _ = 1, 10 do
-    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, -50, nil)
+    RuntimeHeight.Update(0.016, playerWrapper(42, 1), true, true, -100, nil)
 end
-near(RuntimeHeight.GetEffectiveHeightCentimeters(), -50, 0.001, "minimum height")
-near(RuntimeHeight.GetEstimatedHeightCentimeters(), 121, 0.001, "estimated minimum height")
+near(RuntimeHeight.GetEffectiveHeightCentimeters(), -100, 0.001, "minimum height")
+near(RuntimeHeight.GetEstimatedHeightCentimeters(), 71, 0.001, "estimated minimum height")
 near(writes[#writes].value, 0, 0.0001, "minimum graph input")
-near(interactionOffsets[#interactionOffsets], -0.5, 0.0001, "minimum interaction compensation")
+near(interactionOffsets[#interactionOffsets], -1.0, 0.0001, "minimum interaction compensation")
 
 -- Look-at redirection follows immersive view while the graph height has its
 -- own switch; neither feature should implicitly disable the other.
@@ -119,13 +117,29 @@ for _ = 1, 10 do
     RuntimeHeight.Update(0.016, playerWrapper(42, 1), false, true, 14, nil)
 end
 near(RuntimeHeight.GetEffectiveHeightCentimeters(), 14, 0.001, "preserved +14 cm height")
-near(writes[#writes].value, 0.64, 0.0001, "preserved +14 cm graph input")
+near(writes[#writes].value, 0.38, 0.0001, "preserved +14 cm graph input")
 assert(lookAtWrites[#lookAtWrites] == false, "immersive toggle should disable look-at redirection")
 
+RuntimeHeight.Update(0.2, playerWrapper(42, 1), false, true, 5.5, nil)
+near(RuntimeHeight.GetEffectiveHeightCentimeters(), 5.5, 0.001, "fractional external offset")
+near(interactionOffsets[#interactionOffsets], 0.055, 0.0001, "fractional interaction compensation")
+
+RuntimeHeight.Update(1 / 60, playerWrapper(42, 1), true, true, 20, nil)
+local moving = RuntimeHeight.GetEffectiveHeightCentimeters()
+assert(moving > 5.5 and moving < 20, "height changes should blend rather than snap")
+RuntimeHeight.Update(0, playerWrapper(42, 1), true, true, -20, nil)
+near(RuntimeHeight.GetEffectiveHeightCentimeters(), moving, 0.001, "retargeting should preserve current height")
+for _ = 1, 120 do
+    RuntimeHeight.Update(1 / 60, playerWrapper(42, 1), true, true, -20, nil)
+end
+near(RuntimeHeight.GetEffectiveHeightCentimeters(), -20, 0.001, "retargeting should reach the new height")
+
 RuntimeHeight.Shutdown(playerWrapper(42, 1))
-near(writes[#writes].value, 0.5, 0.0001, "shutdown graph input")
+near(writes[#writes].value, 1 / 3, 0.0001, "shutdown graph input")
 near(interactionOffsets[#interactionOffsets], 0, 0.0001, "shutdown interaction compensation")
 assert(lookAtWrites[#lookAtWrites] == false, "shutdown should disable look-at redirection")
+assert(not RuntimeHeight.IsAvailable(), "shutdown must invalidate height compatibility")
+assert(RuntimeHeight.IsCompatibilityPending(), "shutdown must require verification for the next player")
 assert(graphInspections == 2, "settings and transitions should not recheck a resolved graph")
 
 RuntimeHeight.ResetPlayer()

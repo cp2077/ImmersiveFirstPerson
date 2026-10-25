@@ -18,6 +18,7 @@ GameSession.Event = {
 	Blur = 'Blur',
 	Resume = 'Resume',
 	Death = 'Death',
+	Resurrect = 'Resurrect',
 	Update = 'Update',
 	Load = 'Load',
 	Save = 'Save',
@@ -95,7 +96,7 @@ local stateProps = {
 	{ current = 'isLoaded', previous = 'wasLoaded', event = { on = GameSession.Event.Start, off = GameSession.Event.End, scope = GameSession.Scope.Session } },
 	{ current = 'isPaused', previous = 'wasPaused', event = { on = GameSession.Event.Pause, off = GameSession.Event.Resume, scope = GameSession.Scope.Pause } },
 	{ current = 'isBlurred', previous = 'wasBlurred', event = { on = GameSession.Event.Blur, off = GameSession.Event.Resume, scope = GameSession.Scope.Blur } },
-	{ current = 'isDead', previous = 'wasWheel', event = { on = GameSession.Event.Death, scope = GameSession.Scope.Death } },
+	{ current = 'isDead', previous = 'wasWheel', event = { on = GameSession.Event.Death, off = GameSession.Event.Resurrect, scope = GameSession.Scope.Death } },
 	{ current = 'timestamp' },
 	{ current = 'timestamps' },
 	{ current = 'sessionKey' },
@@ -730,10 +731,13 @@ local function initialize(event)
 	-- Death State
 
 	if required[GameSession.Scope.Death] and not initialized[GameSession.Scope.Death] then
-		Observe('PlayerPuppet', 'OnDeath', function()
-			--spdlog.error(('PlayerPuppet::OnDeath()'))
-
+		Observe('DeathEvents', 'OnEnter', function()
 			updateDead(true)
+			notifyObservers()
+		end)
+
+		Observe('PlayerPuppet', 'OnResurrect', function()
+			updateDead(false)
 			notifyObservers()
 		end)
 

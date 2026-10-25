@@ -7,6 +7,8 @@ local defaults = {
     immersiveViewEnabled = true,
     freeLookEnabled = true,
     heightAdjustmentEnabled = true,
+    gigaVEnabled = false,
+    externalHeightControlEnabled = true,
     freeLookSensitivity = Vars.FREELOOK.DEFAULT_SENSITIVITY,
     freeLookSmoothness = Vars.FREELOOK.DEFAULT_SMOOTHNESS,
     freeLookReturnSmoothness = 50,
@@ -144,7 +146,7 @@ local function migrate(config)
     return config
 end
 
-local function validate(config)
+local function validate(config, loading)
     local result = copyDefaults()
     for key in pairs(defaults) do
         if config[key] ~= nil then
@@ -167,10 +169,18 @@ local function validate(config)
     result.immersiveViewEnabled = result.immersiveViewEnabled == true
     result.freeLookEnabled = result.freeLookEnabled == true
     result.heightAdjustmentEnabled = result.heightAdjustmentEnabled == true
+    result.gigaVEnabled = result.gigaVEnabled == true
+    result.externalHeightControlEnabled = result.externalHeightControlEnabled == true
+    local savedHeight = tonumber(result.heightAdjustmentAmount) or defaults.heightAdjustmentAmount
+    if loading and not result.gigaVEnabled
+        and (savedHeight < Vars.HEIGHT.MINIMUM_CM or savedHeight > Vars.HEIGHT.MAXIMUM_CM) then
+        result.gigaVEnabled = true
+        Helpers.PrintMsg(("GigaV enabled to preserve your saved height adjustment of %+.0f cm."):format(savedHeight))
+    end
     result.heightAdjustmentAmount = math.floor(clamp(
-        tonumber(result.heightAdjustmentAmount) or defaults.heightAdjustmentAmount,
-        -50,
-        50
+        savedHeight,
+        result.gigaVEnabled and Vars.HEIGHT.GIGAV_MINIMUM_CM or Vars.HEIGHT.MINIMUM_CM,
+        result.gigaVEnabled and Vars.HEIGHT.GIGAV_MAXIMUM_CM or Vars.HEIGHT.MAXIMUM_CM
     ) + 0.5)
     result.version = Vars.CONFIG_VERSION
     return result
@@ -218,7 +228,7 @@ local function writeConfig()
 end
 
 function Config.InitConfig()
-    Config.inner = validate(migrate(readConfig() or copyDefaults()))
+    Config.inner = validate(migrate(readConfig() or copyDefaults()), true)
     Helpers.SetDebugLoggingEnabled(Config.inner.debugLogging)
     Config.isReady = true
     writeConfig()

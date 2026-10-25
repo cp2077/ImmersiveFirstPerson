@@ -7,11 +7,11 @@ param(
     [Parameter(Mandatory)]
     [string] $MaximumHeightAnimGraphJson,
     [ValidatePattern('^[a-z0-9-]+$')]
-    [string] $VariantTag = 'signed-50cm',
-    [ValidateRange(-0.50, -0.01)]
-    [double] $MinimumHeightMeters = -0.50,
-    [ValidateRange(0.01, 0.50)]
-    [double] $MaximumHeightMeters = 0.50,
+    [string] $VariantTag = 'minus100-plus200cm',
+    [ValidateRange(-1.0, -0.01)]
+    [double] $MinimumHeightMeters = -1.0,
+    [ValidateRange(0.01, 2.0)]
+    [double] $MaximumHeightMeters = 2.0,
     [Parameter(Mandatory)]
     [string] $WolvenKit,
     [Parameter(Mandatory)]
@@ -22,8 +22,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $variableName = 'ifp_height_blend'
-$contractVariableName = 'ifp_height_contract_v2_signed_50cm'
-$debugName = 'ImmersiveFirstPerson_Runtime_Height_v2_signed_50cm'
+$contractVariableName = 'ifp_height_contract_v3_minus100_plus200cm'
+$debugName = 'ImmersiveFirstPerson_Runtime_Height_v3_minus100_plus200cm'
+$neutralBlend = -$MinimumHeightMeters / ($MaximumHeightMeters - $MinimumHeightMeters)
+$neutralBlendJson = $neutralBlend.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
 $experimentsRoot = [IO.Path]::GetFullPath($WorkRoot)
 $experimentRoot = Join-Path $experimentsRoot "animgraph-runtime-height-blend-proof-$VariantTag"
 $jsonRoot = Join-Path $experimentRoot 'json'
@@ -325,7 +327,7 @@ $variableDefinition = @'
               "HandleId": "__VARIABLE_HANDLE__",
               "Data": {
                 "$type": "animAnimVariableFloat",
-                "default": 0.5,
+                "default": __NEUTRAL_BLEND__,
                 "enableDebug": 0,
                 "max": 1,
                 "min": 0,
@@ -334,12 +336,13 @@ $variableDefinition = @'
                   "$storage": "string",
                   "$value": "__VARIABLE_NAME__"
                 },
-                "value": 0.5
+                "value": __NEUTRAL_BLEND__
               }
             },
 '@
 $variableDefinition = $variableDefinition.Replace('__VARIABLE_HANDLE__', [string] $variableHandle).
-    Replace('__VARIABLE_NAME__', $variableName)
+    Replace('__VARIABLE_NAME__', $variableName).
+    Replace('__NEUTRAL_BLEND__', $neutralBlendJson)
 $contractVariableDefinition = $variableDefinition.
     Replace([string] $variableHandle, [string] $contractVariableHandle).
     Replace($variableName, $contractVariableName)
@@ -390,7 +393,7 @@ Move-Item -LiteralPath $packed -Destination $disabled
     MaximumHeight = ('{0:R}m' -f $MaximumHeightMeters)
     RuntimeVariable = $variableName
     ContractVariable = $contractVariableName
-    DefaultBlend = 0.5
+    DefaultBlend = $neutralBlend
     BlendHandle = $blendHandle
     FloatNodeHandle = $floatNodeHandle
     VariableHandle = $variableHandle

@@ -1,6 +1,13 @@
 return {
     CONFIG_FILE_NAME = "config.json",
-    CONFIG_VERSION = 7,
+    CONFIG_VERSION = 8,
+
+    HEIGHT = {
+        MINIMUM_CM = -20,
+        MAXIMUM_CM = 20,
+        GIGAV_MINIMUM_CM = -100,
+        GIGAV_MAXIMUM_CM = 200,
+    },
 
     BODY = {
         -- Native look-down angle where body-presence correction starts / reaches full strength.

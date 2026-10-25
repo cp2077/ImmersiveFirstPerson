@@ -1,38 +1,58 @@
 # Immersive First Person
 
-## Features
+Immersive First Person adds a first-person body view, FreeLook, and adjustable height for V in Cyberpunk 2077.
 
-1. A pitch-aware first-person body view designed to avoid the neck opening and body clipping.
-2. FreeLook for rotating V's view without rotating their body, with mouse and controller input.
-3. Runtime-adjustable skeletal height for V, plus an independent NPC head-look target fix.
+Body correction applies while looking down with empty hands. FreeLook also works with a weapon equipped. Both yield to vehicles, workspots, scripted cameras, and forced animations. Height stays active during combat, ADS, scanner use, dialogue, and swimming; it returns to normal for vehicles, workspots, traversal, takedowns, body carrying, knockdowns, and camera-controlled scenes. FOV stays unchanged.
 
-Body correction runs while looking down during ordinary gameplay and yields to vehicles, workspots, traversal, takedowns, knockdowns, body carrying, and camera-controlled scenes. FreeLook remains available while a weapon is equipped, and the mod leaves the game's FOV unchanged.
+## Install
 
-The bundled height override replaces `player_base.animgraph` with a versioned two-branch blend. Its endpoints shorten or lengthen V's legs by 50 cm while moving the COG by the same amount and keeping the Root-space foot targets grounded. The midpoint is the exact vanilla pose. CET drives the blend over 100 ms, so the setting can change at runtime without moving `gameFPPCameraComponent`, changing camera pitch, or restarting the game.
-
-Height remains active during ordinary roaming, combat, ADS, scanner use, dialogue, and swimming. It smoothly returns to vanilla for any vehicle occupancy, workspots, camera-controlled scenes, ladders/climbing/vaulting, takedowns/grapples, body carrying, knockdowns, and other forced-contact states. Negative values and values above +14 cm are deliberately marked experimental; values above +30 cm are extremely unstable.
-
-Camera-based interaction volumes use V's unmodified view height, so changing height does not move that reference point out of an authored dialogue or object volume. The displayed camera and aiming retain the chosen height. If the native interaction compatibility check fails, height adjustment is unavailable and the rest of the mod continues normally.
-
-The mod verifies the exact loaded animgraph contract. If the bundled archive is absent, incompatible, or overridden by another mod, the height slider is unavailable and the rest of Immersive First Person continues normally.
-
-## Installation
-
-This release is built and tested for Cyberpunk 2077 2.31. The bundled height override is game-version-specific. After a game update, remove `archive\pc\mod\ImmersiveFirstPersonHeight.archive` until a compatible mod update is available. Height adjustment fails closed if its native contract check does not support the running game; the rest of the mod continues normally.
+Supports **Cyberpunk 2077 2.5**. After an unsupported game update, remove `archive\pc\mod\ImmersiveFirstPersonHeight.archive` and leave it out until a compatible mod build is available.
 
 1. Install Cyber Engine Tweaks, RED4ext, and redscript.
 2. Install **Immersive First Person** into the Cyberpunk 2077 directory containing the `bin` folder.
 
-The included archive replaces `base\gameplay\anim_graphs\player_base.animgraph`, so another mod replacing that resource may take priority. Runtime detection handles this safely, but the two graph changes are not merged automatically.
+Mods replacing `player_base.animgraph` conflict with height support. IFP disables height adjustment if compatibility checks fail; the other features remain available.
 
-## Configuration
+## Use
 
-Bindings live in two CET Overlay sections:
+In CET's **Bindings** tab, bind **FreeLook** under **Inputs** and **Toggle Enabled** under **Hotkeys**.
 
-1. **Hotkeys** -> Toggle Enabled
-2. **Inputs** -> FreeLook
+Height adjustment changes leg proportions rather than scaling the whole body. Extreme settings can cause clipping and animation distortion.
 
-The CET Overlay exposes independent **Immersive view**, **FreeLook**, and **Height adjustment** switches, FreeLook settings, a `-50 cm` to `+50 cm` height slider when the compatible height graph is loaded, and a **Debug** section. Generic NPC gaze correction follows the immersive-view switch. Start around +5 to +8 cm.
+## API
+
+CET mods access the API through `GetMod("ImmersiveFirstPerson").api`:
+
+```lua
+local ifp = GetMod("ImmersiveFirstPerson")
+if ifp and ifp.api and ifp.api.SetHeightOffset then
+    local ok, reason = ifp.api.SetHeightOffset("MyMod", 5.5)
+end
+```
+
+- `Disable(modName)` suspends the whole mod for that caller. `Enable(modName)` releases only that caller's suspension. Names are optional for legacy callers, which share one unnamed suspension; provide a stable name to keep callers separate. Neither call changes the user's Enabled switch. Both return `true` or `false, reason` for an invalid name. Suspensions clear on session end or CET reload.
+- `IsEnabled()` reports whether the user's switch is on and no mod is suspending IFP. The CET overlay lists blocking mods.
+- `GetCameraState()` returns camera mode, ownership, and body/FreeLook diagnostics. Fields are defined in [CameraCore.lua](Modules/CameraCore.lua).
+- `StartNativeCameraCapture()` suspends camera corrections and starts diagnostic transform sampling. Close CET and sweep the view up-down-up while stationary. The [sampler](Modules/NativeCameraSampler.lua) writes its samples automatically when complete.
+- `CancelNativeCameraCapture()` stops sampling and discards the active capture.
+- `SetHeightOffset(modName, centimeters)` replaces that name's contribution. Offsets add to the user's height within their allowed range; zero removes one. Changes blend like the height slider.
+- `SetHeightEnabled(modName, false)` suspends height adjustment. Passing `true` releases only that name's suspension; the user's switch and other suspensions still apply.
+- `GetHeightState()` returns `available`, `pending`, `enabled`, `targetCentimeters`, `effectiveCentimeters`, `suppressedBy`, and `contributions` (`modName`, `centimeters`).
+
+Height setters return `true` or `false, reason`. Requests require height support and the user's permission; they cannot enable GigaV or overwrite saved height. Clearing offsets and releasing suspensions remain allowed without permission or support. Requests need no refresh calls and clear on session end, CET reload, or permission revocation.
+
+## Build
+
+Requires Visual Studio C++ tools, RED4ext.SDK at the [release workflow's pinned revision](.github/workflows/publish-nexus.yml), and CMake, LuaJIT, and Lua Language Server on PATH. To validate, build, and deploy with the game closed:
+
+```powershell
+$gameRoot = 'C:\path\to\Cyberpunk 2077'
+$sdkRoot = 'C:\path\to\RED4ext.SDK'
+$cmake = (Get-Command cmake.exe).Source
+scripts\deploy.ps1 -GameRoot $gameRoot -CMake $cmake -Red4extSdkPath $sdkRoot
+```
+
+[Archive generation](scripts/build-height-archive.ps1) requires WolvenKit CLI. [Packaging](scripts/bundle.sh) runs in Git Bash.
 
 ----
 

@@ -60,8 +60,8 @@ if (-not (Test-Path -LiteralPath $AnimGraphJson -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $WolvenKit -PathType Leaf)) {
     throw "WolvenKit CLI not found: $WolvenKit"
 }
-if ($DeltaMeters -eq 0.0 -or [Math]::Abs($DeltaMeters) -gt 0.50) {
-    throw "DeltaMeters must be non-zero and between -0.50 and 0.50"
+if ($DeltaMeters -eq 0.0 -or $DeltaMeters -lt -1.0 -or $DeltaMeters -gt 2.0) {
+    throw "DeltaMeters must be non-zero and between -1.0 and 2.0"
 }
 
 $placementSlug = switch ($Placement) {

@@ -26,7 +26,7 @@ jobs:
         shell: pwsh
         run: |
           git clone --filter=blob:none https://github.com/WopsS/RED4ext.SDK.git "${{ runner.temp }}\RED4ext.SDK"
-          git -C "${{ runner.temp }}\RED4ext.SDK" checkout ad7277714ad30d6885d7050c5ba24fa0102f6920
+          git -C "${{ runner.temp }}\RED4ext.SDK" checkout 5246e659d783e5834cc08a90e56c8932c9ed3449
 
       - name: Build native plugin
         shell: pwsh

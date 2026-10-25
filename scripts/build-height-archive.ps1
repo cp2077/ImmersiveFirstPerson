@@ -17,8 +17,9 @@ $gameRootFull = [IO.Path]::GetFullPath($GameRoot).TrimEnd('\')
 $wolvenKitFull = [IO.Path]::GetFullPath($WolvenKit)
 $sourceArchive = Join-Path $gameRootFull 'archive\pc\content\basegame_1_engine.archive'
 $resourcePath = 'base\gameplay\anim_graphs\player_base.animgraph'
-$vanillaHash = 'DFF7C3BDEF154B9F9CCF87BDCA0FAF3EAC4565E4428714FB52D46F4C4F7D0EB3'
-$builtGraphHash = '4DBB05A39639A82A788B0728AF8732D96119ED449AA6B5E979CBD755B7F998CC'
+$vanillaHash = '7989A96A5F6F520D67014E4360A3ADA06FB3D8A1574DF20955482A0E895A8454'
+# In-game-verified 2.5 graph cooked with WolvenKit CLI 8.18.0.
+$builtGraphHash = '0A2602FD40EEC3072D1823C1F597D4287029407846F21CBEC5B3D51E698F5BF1'
 
 foreach ($required in @($sourceArchive, $wolvenKitFull)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
@@ -49,7 +50,7 @@ try {
     }
     $actualVanillaHash = (Get-FileHash -LiteralPath $vanillaGraph -Algorithm SHA256).Hash
     if ($actualVanillaHash -ne $vanillaHash) {
-        throw "The vanilla player animgraph does not match game 2.31. Expected $vanillaHash, got $actualVanillaHash."
+        throw "The vanilla player animgraph does not match game 2.5. Expected $vanillaHash, got $actualVanillaHash."
     }
 
     Write-Host 'Converting the vanilla animgraph to JSON'
@@ -59,38 +60,39 @@ try {
     }
     $vanillaJson = Join-Path $jsonRoot 'player_base.animgraph.json'
 
-    Write-Host 'Adding the -50 cm grounded height pose'
+    Write-Host 'Adding the -100 cm grounded height pose'
     & (Join-Path $PSScriptRoot 'height\add-grounded-height.ps1') `
-        -DeltaMeters -0.50 `
+        -DeltaMeters -1.0 `
         -AnimGraphJson $vanillaJson `
         -WolvenKit $wolvenKitFull `
         -WorkRoot $workRoot `
         -Placement GroundedFullHeight `
-        -VariantTag 'minus-50cm'
+        -VariantTag 'minus-100cm'
 
-    $minimumHeightJson = Join-Path $workRoot 'animgraph-grounded-full-height-minus-50cm\json\player_base.animgraph.json'
-    Write-Host 'Adding the +50 cm grounded height pose'
+    $minimumHeightJson = Join-Path $workRoot 'animgraph-grounded-full-height-minus-100cm\json\player_base.animgraph.json'
+    Write-Host 'Adding the +200 cm grounded height pose'
     & (Join-Path $PSScriptRoot 'height\add-grounded-height.ps1') `
-        -DeltaMeters 0.50 `
+        -DeltaMeters 2.0 `
         -AnimGraphJson $vanillaJson `
         -WolvenKit $wolvenKitFull `
         -WorkRoot $workRoot `
         -Placement GroundedFullHeight `
-        -VariantTag 'plus-50cm'
+        -VariantTag 'plus-200cm'
 
-    $maximumHeightJson = Join-Path $workRoot 'animgraph-grounded-full-height-plus-50cm\json\player_base.animgraph.json'
+    $maximumHeightJson = Join-Path $workRoot 'animgraph-grounded-full-height-plus-200cm\json\player_base.animgraph.json'
     Write-Host 'Adding the runtime blend input'
     & (Join-Path $PSScriptRoot 'height\add-runtime-blend.ps1') `
         -BaseAnimGraphJson $vanillaJson `
         -MinimumHeightAnimGraphJson $minimumHeightJson `
         -MaximumHeightAnimGraphJson $maximumHeightJson `
-        -VariantTag 'signed-50cm' `
-        -MinimumHeightMeters -0.50 `
-        -MaximumHeightMeters 0.50 `
+        -VariantTag 'minus100-plus200cm' `
+        -MinimumHeightMeters -1.0 `
+        -MaximumHeightMeters 2.0 `
         -WolvenKit $wolvenKitFull `
         -WorkRoot $workRoot
 
-    $builtArchive = Join-Path $workRoot 'animgraph-runtime-height-blend-proof-signed-50cm\ImmersiveFirstPersonHeight-animgraph-runtime-height-blend-proof-signed-50cm.archive.disabled'
+    $blendRoot = Join-Path $workRoot 'animgraph-runtime-height-blend-proof-minus100-plus200cm'
+    $builtArchive = Join-Path $blendRoot 'ImmersiveFirstPersonHeight-animgraph-runtime-height-blend-proof-minus100-plus200cm.archive.disabled'
     if (-not (Test-Path -LiteralPath $builtArchive -PathType Leaf)) {
         throw "The height archive was not built: $builtArchive"
     }
@@ -105,7 +107,7 @@ try {
     $verifiedGraph = Join-Path $verifyExtractRoot $resourcePath
     $actualBuiltHash = (Get-FileHash -LiteralPath $verifiedGraph -Algorithm SHA256).Hash
     if ($actualBuiltHash -ne $builtGraphHash) {
-        throw "The built animgraph is not the known signed 50 cm graph. Expected $builtGraphHash, got $actualBuiltHash."
+        throw "The built animgraph does not match the verified 2.5 graph from WolvenKit CLI 8.18.0. Expected $builtGraphHash, got $actualBuiltHash."
     }
 
     $outputDirectory = Split-Path -Parent $outputFull

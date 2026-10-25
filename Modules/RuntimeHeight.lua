@@ -1,10 +1,11 @@
 local Helpers = require("Modules/Helpers")
+local Vars = require("Modules/Vars")
 
 local RuntimeHeight = {}
 
 local BASE_PLAYER_HEIGHT_CM = 171
-local MINIMUM_HEIGHT_CM = -50
-local MAXIMUM_HEIGHT_CM = 50
+local MINIMUM_HEIGHT_CM = Vars.HEIGHT.GIGAV_MINIMUM_CM
+local MAXIMUM_HEIGHT_CM = Vars.HEIGHT.GIGAV_MAXIMUM_CM
 local HEIGHT_RANGE_CM = MAXIMUM_HEIGHT_CM - MINIMUM_HEIGHT_CM
 local NEUTRAL_BLEND = (0 - MINIMUM_HEIGHT_CM) / HEIGHT_RANGE_CM
 local TRANSITION_DURATION = 0.10
@@ -168,9 +169,7 @@ local function updateTransition(delta, player)
             TRANSITION_DURATION,
             state.transitionElapsed + math.max(tonumber(delta) or 0.0, 0.0)
         )
-        local progress = TRANSITION_DURATION <= 0.0
-            and 1.0
-            or state.transitionElapsed / TRANSITION_DURATION
+        local progress = state.transitionElapsed / TRANSITION_DURATION
         local eased = smoothstep(progress)
         state.currentBlend = state.startBlend
             + (state.targetBlend - state.startBlend) * eased
@@ -258,12 +257,12 @@ function RuntimeHeight.Update(
     end
 
     local amount = clamp(
-        math.floor((tonumber(amountCentimeters) or 0.0) + 0.5),
+        tonumber(amountCentimeters) or 0.0,
         MINIMUM_HEIGHT_CM,
         MAXIMUM_HEIGHT_CM
     )
-    local targetBlend = heightEnabled == true
-        and suppressionReason == nil
+    local active = heightEnabled == true and suppressionReason == nil
+    local targetBlend = active
         and (amount - MINIMUM_HEIGHT_CM) / HEIGHT_RANGE_CM
         or NEUTRAL_BLEND
     beginTransition(targetBlend)
@@ -278,13 +277,7 @@ function RuntimeHeight.Shutdown(player)
     if player then
         pcall(setLookAtEnabled, player, false)
     end
-    pcall(resetInteractionHeight)
-    state.currentBlend = NEUTRAL_BLEND
-    state.targetBlend = NEUTRAL_BLEND
-    state.lastSentBlend = nil
-    state.lookAtApplied = nil
-    state.suppressionReason = nil
-    state.dirty = true
+    RuntimeHeight.ResetPlayer()
 end
 
 function RuntimeHeight.IsAvailable()
@@ -311,14 +304,6 @@ end
 
 function RuntimeHeight.GetEstimatedHeightCentimeters()
     return BASE_PLAYER_HEIGHT_CM + RuntimeHeight.GetEffectiveHeightCentimeters()
-end
-
-function RuntimeHeight.GetMaximumHeightCentimeters()
-    return MAXIMUM_HEIGHT_CM
-end
-
-function RuntimeHeight.GetMinimumHeightCentimeters()
-    return MINIMUM_HEIGHT_CM
 end
 
 return RuntimeHeight

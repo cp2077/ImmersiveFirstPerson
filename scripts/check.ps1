@@ -91,6 +91,10 @@ if ($modRoot -eq $workspace) {
         if ($LASTEXITCODE -ne 0) {
             throw "Runtime height tests failed with exit code $LASTEXITCODE."
         }
+        & $luaJit (Join-Path $workspace 'tests\height-control.lua')
+        if ($LASTEXITCODE -ne 0) {
+            throw "External height control tests failed with exit code $LASTEXITCODE."
+        }
         & $luaJit (Join-Path $workspace 'tests\player-state-cache.lua')
         if ($LASTEXITCODE -ne 0) {
             throw "Player-state cache tests failed with exit code $LASTEXITCODE."
@@ -98,6 +102,14 @@ if ($modRoot -eq $workspace) {
         & $luaJit (Join-Path $workspace 'tests\camera-eligibility.lua')
         if ($LASTEXITCODE -ne 0) {
             throw "Camera eligibility tests failed with exit code $LASTEXITCODE."
+        }
+        & $luaJit (Join-Path $workspace 'tests\api-session.lua')
+        if ($LASTEXITCODE -ne 0) {
+            throw "API and session tests failed with exit code $LASTEXITCODE."
+        }
+        & $luaJit (Join-Path $workspace 'tests\game-session.lua')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Game session tests failed with exit code $LASTEXITCODE."
         }
         & $luaJit (Join-Path $workspace 'tests\camera-holster.lua')
         if ($LASTEXITCODE -ne 0) {

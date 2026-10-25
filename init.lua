@@ -3,15 +3,17 @@ local CameraCore = require("Modules/CameraCore")
 local Config = require("Modules/Config")
 local GameSession = require("Modules/GameSession")
 local Helpers = require("Modules/Helpers")
+local HeightControl = require("Modules/HeightControl")
 local NativeCameraSampler = require("Modules/NativeCameraSampler")
 local RuntimeHeight = require("Modules/RuntimeHeight")
+local Vars = require("Modules/Vars")
 
 local initialized = false
 local isLoaded = false
 local isPaused = false
 local isOverlayOpen = false
-local isEnabled = true
-local isDisabledByApi = false
+local userEnabled = true
+local apiSuspensions = {}
 local weaponCameraBlocked = false
 local weaponCameraClearElapsed = 0.0
 local lastCameraBlockReason = nil
@@ -26,6 +28,44 @@ local cachedCameraContext = {}
 local lastSceneContext = {}
 
 local API = {}
+
+local function isModEnabled()
+    return userEnabled and next(apiSuspensions) == nil
+end
+
+local function updateEnabledState(wasEnabled, reason)
+    local enabled = isModEnabled()
+    if enabled == wasEnabled then
+        return
+    end
+
+    if enabled then
+        RuntimeHeight.MarkDirty()
+    else
+        RuntimeHeight.Shutdown(Helpers.GetPlayer())
+        CameraCore.Suspend(reason)
+    end
+end
+
+local function setUserEnabled(enabled, reason)
+    local wasEnabled = isModEnabled()
+    userEnabled = enabled
+    updateEnabledState(wasEnabled, reason)
+end
+
+local function setApiSuspension(modName, suspended)
+    if modName == nil then
+        modName = "Unnamed mod (legacy API)"
+    end
+    if not Helpers.IsValidModName(modName) then
+        return false, "invalid_mod_name"
+    end
+
+    local wasEnabled = isModEnabled()
+    apiSuspensions[modName] = suspended and true or nil
+    updateEnabledState(wasEnabled, "disabled by " .. modName)
+    return true
+end
 
 function API.StartNativeCameraCapture()
     CameraCore.Suspend("native camera capture armed")
@@ -242,7 +282,7 @@ local function buildCameraContext(delta, state)
         delta
     )
     logCameraBlockTransition(cameraBlockReason or (blocksCameraForWeapon and "weapon camera" or nil))
-    local commonEligible = isEnabled and cameraBlockReason == nil
+    local commonEligible = isModEnabled() and cameraBlockReason == nil
     local immersiveEligible = commonEligible
         and Config.inner.immersiveViewEnabled
     -- Weapon draw/holster retains the ordinary FPP parent, so CameraCore may
@@ -277,9 +317,13 @@ local function setSessionLoaded(loaded, reason)
         RuntimeHeight.MarkDirty()
     else
         isPaused = false
+        apiSuspensions = {}
+        HeightControl.ClearExternalChanges()
         local player = Helpers.GetPlayer()
         if initialized then
             RuntimeHeight.Shutdown(player)
+        else
+            RuntimeHeight.ResetPlayer()
         end
         lastCameraBlockReason = nil
         CameraCore.Suspend(reason)
@@ -299,21 +343,16 @@ local function setSessionPaused(paused, reason)
     end
 end
 
-function API.Enable()
-    isDisabledByApi = false
-    isEnabled = true
-    RuntimeHeight.MarkDirty()
+function API.Enable(modName)
+    return setApiSuspension(modName, false)
 end
 
-function API.Disable()
-    isDisabledByApi = true
-    isEnabled = false
-    RuntimeHeight.Shutdown(Helpers.GetPlayer())
-    CameraCore.Suspend("disabled by API")
+function API.Disable(modName)
+    return setApiSuspension(modName, true)
 end
 
 function API.IsEnabled()
-    return isEnabled
+    return isModEnabled()
 end
 
 function API.GetCameraState()
@@ -321,13 +360,11 @@ function API.GetCameraState()
 end
 
 function API.GetHeightState()
-    return {
-        available = RuntimeHeight.IsAvailable(),
-        status = RuntimeHeight.GetStatus(),
-        suppressedBy = RuntimeHeight.GetSuppressionReason(),
-        effectiveCentimeters = RuntimeHeight.GetEffectiveHeightCentimeters(),
-    }
+    return HeightControl.GetState(isModEnabled())
 end
+
+API.SetHeightOffset = HeightControl.SetHeightOffset
+API.SetHeightEnabled = HeightControl.SetHeightEnabled
 
 local function tooltipIfHovered(text)
     if ImGui.IsItemHovered() then
@@ -336,6 +373,14 @@ local function tooltipIfHovered(text)
         ImGui.EndTooltip()
     end
 end
+
+local heightUnavailableMessages = {
+    ["RED4ext native plugin unavailable"] = "Install or enable IFP's native plugin and RED4ext, then restart the game.",
+    ["height graph is incompatible"] = "Install the height archive from this IFP release, then restart the game.",
+    ["height archive missing or overridden"] = "Install or enable IFP's height archive, then restart the game. Another animation mod may be overriding it.",
+    ["interaction height compatibility check failed"] = "Height adjustment does not support this game build. Install a compatible IFP release.",
+    ["height controls could not be written"] = "Height adjustment could not be applied. Restart the game; if it persists, check ImmersiveFirstPerson.log.",
+}
 
 local function isShiftEnabled()
     if type(GetMod) ~= "function" then
@@ -472,10 +517,6 @@ function ImmersiveFirstPerson.Init()
             refreshInputSettings()
         end)
 
-        Observe("DeathDecisionsWithResurrection", "ToResurrect", function()
-            setSessionLoaded(true, "resurrected")
-        end)
-
         GameSession.OnStart(function()
             setSessionLoaded(true, "session started")
         end)
@@ -487,6 +528,9 @@ function ImmersiveFirstPerson.Init()
         end)
         GameSession.OnDeath(function()
             setSessionLoaded(false, "player died")
+        end)
+        GameSession.OnResurrect(function()
+            setSessionLoaded(true, "resurrected")
         end)
         GameSession.OnPause(function()
             setSessionPaused(true, "game paused")
@@ -502,7 +546,7 @@ function ImmersiveFirstPerson.Init()
     end)
 
     registerForEvent("onUpdate", function(delta)
-        if not initialized or not isLoaded or not isEnabled or isDisabledByApi then
+        if not initialized or not isLoaded or not isModEnabled() then
             return
         end
 
@@ -525,9 +569,9 @@ function ImmersiveFirstPerson.Init()
         RuntimeHeight.Update(
             delta,
             player,
-            isEnabled and Config.inner.immersiveViewEnabled,
-            isEnabled and Config.inner.heightAdjustmentEnabled,
-            Config.inner.heightAdjustmentAmount,
+            isModEnabled() and Config.inner.immersiveViewEnabled,
+            isModEnabled() and HeightControl.IsEnabled(),
+            HeightControl.GetTargetCentimeters(),
             heightSuppressionReason
         )
 
@@ -555,16 +599,18 @@ function ImmersiveFirstPerson.Init()
         ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, 310, 40)
         ImGui.Begin("Immersive First Person")
 
-        local changed
-        isEnabled, changed = ImGui.Checkbox("Enabled", isEnabled)
+        local enabled, changed = ImGui.Checkbox("Enabled", userEnabled)
         if changed then
-            if isEnabled then
-                isDisabledByApi = false
-                RuntimeHeight.MarkDirty()
-            else
-                RuntimeHeight.Shutdown(Helpers.GetPlayer())
-                CameraCore.Suspend("disabled in overlay")
-            end
+            setUserEnabled(enabled, "disabled in overlay")
+        end
+
+        local disablingMods = {}
+        for modName in pairs(apiSuspensions) do
+            disablingMods[#disablingMods + 1] = modName
+        end
+        table.sort(disablingMods)
+        if #disablingMods > 0 then
+            ImGui.TextWrapped("Disabled by mods: " .. table.concat(disablingMods, ", "))
         end
 
         Config.inner.immersiveViewEnabled, changed = ImGui.Checkbox(
@@ -592,7 +638,6 @@ function ImmersiveFirstPerson.Init()
         )
         if changed then
             Config.SaveConfig()
-            RuntimeHeight.MarkDirty()
         end
 
         drawCompatibilityWarnings()
@@ -638,6 +683,27 @@ function ImmersiveFirstPerson.Init()
 
         ImGui.Separator()
         ImGui.Text("Height")
+        Config.inner.gigaVEnabled, changed = ImGui.Checkbox(
+            "GigaV",
+            Config.inner.gigaVEnabled
+        )
+        tooltipIfHovered("Unlocks adjustments from -100 to +200 cm.")
+        if changed then
+            Config.SaveConfig()
+        end
+
+        Config.inner.externalHeightControlEnabled, changed = ImGui.Checkbox(
+            "Allow other mods to control height",
+            Config.inner.externalHeightControlEnabled
+        )
+        tooltipIfHovered("Other mods can add temporary offsets or disable height adjustment. Turning this off restores your settings.")
+        if changed then
+            Config.SaveConfig()
+            if not Config.inner.externalHeightControlEnabled then
+                HeightControl.ClearExternalChanges()
+            end
+        end
+
         if not GameSession.IsLoaded() then
             ImGui.TextWrapped(
                 "Load a save to check height compatibility and adjust height."
@@ -645,40 +711,57 @@ function ImmersiveFirstPerson.Init()
         elseif RuntimeHeight.IsCompatibilityPending() then
             ImGui.TextDisabled("Checking height compatibility...")
         elseif RuntimeHeight.IsAvailable() then
+            local minimumHeight, maximumHeight = HeightControl.GetLimits()
             Config.inner.heightAdjustmentAmount, changed = ImGui.SliderInt(
-                "Adjustment",
+                "Your adjustment",
                 math.floor(Config.inner.heightAdjustmentAmount),
-                RuntimeHeight.GetMinimumHeightCentimeters(),
-                RuntimeHeight.GetMaximumHeightCentimeters(),
+                minimumHeight,
+                maximumHeight,
                 "%+d cm"
             )
             if changed then
                 Config.SaveConfig()
-                RuntimeHeight.MarkDirty()
             end
 
-            local heightAmount = Config.inner.heightAdjustmentAmount
-            if heightAmount < 0 then
+            local heightState = HeightControl.GetState(isModEnabled())
+            local disablingHeightMods = HeightControl.GetDisablingMods()
+            if #heightState.contributions > 0 then
+                local clamped = HeightControl.GetRequestedCentimeters() ~= heightState.targetCentimeters
+                if clamped then
+                    ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.65, 0.15, 1.0)
+                end
+                ImGui.Text(("Combined adjustment: %+.1f cm"):format(heightState.targetCentimeters))
+                if clamped then
+                    ImGui.PopStyleColor(1)
+                end
+            end
+            if #disablingHeightMods > 0 then
+                ImGui.TextDisabled("Height suspended by mods")
+            end
+            if (#heightState.contributions > 0 or #disablingHeightMods > 0)
+                and ImGui.TreeNode("Mod height control") then
+                for _, contribution in ipairs(heightState.contributions) do
+                    ImGui.TextWrapped(("%s: %+.1f cm"):format(
+                        contribution.modName,
+                        contribution.centimeters
+                    ))
+                end
+                for _, modName in ipairs(disablingHeightMods) do
+                    ImGui.TextWrapped(modName .. ": height suspended")
+                end
+                ImGui.TreePop()
+            end
+
+            local heightAmount = heightState.targetCentimeters
+            if heightAmount < Vars.HEIGHT.MINIMUM_CM or heightAmount > Vars.HEIGHT.MAXIMUM_CM then
                 ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.25, 0.25, 1.0)
                 ImGui.TextWrapped(
-                    "Negative values are experimental: legs, knees, authored contacts, and transitions may look wrong."
-                )
-                ImGui.PopStyleColor(1)
-            elseif heightAmount > 30 then
-                ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.25, 0.25, 1.0)
-                ImGui.TextWrapped(
-                    "Above +30 cm is extremely unstable: expect severe animation and contact distortion."
-                )
-                ImGui.PopStyleColor(1)
-            elseif heightAmount > 14 then
-                ImGui.PushStyleColor(ImGuiCol.Text, 1.0, 0.25, 0.25, 1.0)
-                ImGui.TextWrapped(
-                    "Above +14 cm is experimental: knees, authored contacts, and transitions may look wrong."
+                    "Experimental height: expect body clipping and animation distortion."
                 )
                 ImGui.PopStyleColor(1)
             end
             local suppressionReason = RuntimeHeight.GetSuppressionReason()
-            if Config.inner.heightAdjustmentEnabled
+            if heightState.enabled
                 and heightAmount ~= 0
                 and suppressionReason then
                 ImGui.TextWrapped("Temporarily disabled: " .. suppressionReason)
@@ -688,9 +771,8 @@ function ImmersiveFirstPerson.Init()
             ))
         else
             ImGui.TextDisabled("Controls unavailable")
-            ImGui.TextWrapped(
-                "ImmersiveFirstPersonHeight.archive is missing or overridden by another mod modifying player animgraph."
-            )
+            ImGui.TextWrapped(heightUnavailableMessages[RuntimeHeight.GetStatus()]
+                or "Height adjustment is unavailable. Restart the game and check ImmersiveFirstPerson.log if it persists.")
         end
 
         ImGui.Separator()
@@ -727,18 +809,11 @@ function ImmersiveFirstPerson.Init()
     end)
 
     registerHotkey("ifp_toggle_enabled", "Toggle Enabled", function()
-        isEnabled = not isEnabled
-        if isEnabled then
-            isDisabledByApi = false
-            RuntimeHeight.MarkDirty()
-        else
-            RuntimeHeight.Shutdown(Helpers.GetPlayer())
-            CameraCore.Suspend("disabled by hotkey")
-        end
+        setUserEnabled(not userEnabled, "disabled by hotkey")
     end)
 
     registerInput("ifp_freelook", "FreeLook", function(keydown)
-        if isDisabledByApi or not isLoaded or not isEnabled then
+        if not isLoaded or not isModEnabled() then
             return
         end
 
