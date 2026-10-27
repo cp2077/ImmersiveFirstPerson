@@ -175,13 +175,24 @@ jobs:
             exit 1
           }
 
-      - name: Upload ZIP to GitHub release
+          compat_archive="build/Immersive First Person - ITP Compatibility.zip"
+          unzip -t "$compat_archive"
+          compat_entries=$(unzip -Z1 "$compat_archive" | sed '/\/$/d')
+          [[ "$compat_entries" == 'archive/pc/mod/0_ImmersiveFirstPerson_ITP_Compat.archive' ]] || {
+            echo "ITP compatibility package must contain only its compatibility archive" >&2
+            exit 1
+          }
+
+      - name: Upload ZIPs to GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          gh release upload "$RELEASE_TAG" "build/Immersive First Person.zip" --clobber
+          gh release upload "$RELEASE_TAG" \
+            "build/Immersive First Person.zip" \
+            "build/Immersive First Person - ITP Compatibility.zip" \
+            --clobber
 
       - name: Upload the release to Nexus Mods
         uses: Nexus-Mods/upload-action@c96019556046053aa26044b44396cd38929daf23 # v1.0.0-beta.10

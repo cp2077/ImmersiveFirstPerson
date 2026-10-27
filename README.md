@@ -6,12 +6,14 @@ Body correction applies while looking down with empty hands. FreeLook also works
 
 ## Install
 
-Supports **Cyberpunk 2077 2.5**. After an unsupported game update, remove `archive\pc\mod\ImmersiveFirstPersonHeight.archive` and leave it out until a compatible mod build is available.
+Supports **Cyberpunk 2077 2.5**. After an unsupported game update, remove `archive\pc\mod\ImmersiveFirstPersonHeight.archive` or its ITP compatibility replacement until a compatible mod build is available.
 
 1. Install Cyber Engine Tweaks, RED4ext, and redscript.
 2. Install **Immersive First Person** into the Cyberpunk 2077 directory containing the `bin` folder.
 
 Mods replacing `player_base.animgraph` conflict with height support. IFP disables height adjustment if compatibility checks fail; the other features remain available.
+
+For Immersive Third Person, also extract **Immersive First Person - ITP Compatibility.zip** into the game directory and remove `archive\pc\mod\ImmersiveFirstPersonHeight.archive`. Keep the compatibility archive's `0_` filename prefix. Repeat this after updating the main package. The compatibility package requires ITP.
 
 ## Use
 
